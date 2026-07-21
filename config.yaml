@@ -1,0 +1,25 @@
+name: "Tuya Local Key Extractor"
+version: "1.0.0"
+slug: "tuya_local_key_extractor"
+description: "Extrahiert Device-IDs, Local Keys und IPs aus deinem Tuya Cloud Account – fertig für localtuya"
+url: "https://github.com/Pitbull19850119/tuya-local-key-extractor-addon"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+host_network: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:key-chain
+panel_title: "Tuya Key Extractor"
+options:
+  access_id: ""
+  access_secret: ""
+  region: "eu"
+  username: ""
+schema:
+  access_id: str
+  access_secret: password
+  region: "list(eu|us|cn|in)"
+  username: str
