@@ -62,6 +62,18 @@
 <div id="searchStatus"></div>
 <div id="searchResults"></div>
 
+<div id="bulkMatchSection" style="margin-top:20px;">
+  <h2>IP-Liste zuordnen (z.B. aus Starlink-App)</h2>
+  <p style="font-size:12px;color:#888;margin-top:4px;">
+    Kompletten Text/Liste aus der Starlink-App hier reinkopieren (IPs werden automatisch rausgefiltert,
+    der Rest ist egal). Wird per echtem Verbindungstest gegen die oben gefundenen Treffer abgeglichen —
+    kein Raten anhand des Namens. Dauert je nach Anzahl 10–60 Sekunden.
+  </p>
+  <textarea id="ipListArea" rows="4" style="width:100%;background:#222;color:#eee;border:1px solid #444;border-radius:6px;padding:8px;box-sizing:border-box;font-size:14px;"></textarea>
+  <button onclick="bulkMatch()">🔗 IPs den aktuellen Treffern zuordnen</button>
+  <div id="bulkMatchStatus" style="margin-top:8px;font-size:13px;"></div>
+</div>
+
 <details>
   <summary>Alle geladenen Geräte anzeigen (Tabelle)</summary>
   <div id="tableArea"></div>
@@ -70,6 +82,7 @@
 <script>
 let lastDevices = [];
 let searchTimer = null;
+let lastSearchMatchIds = [];
 
 window.addEventListener('DOMContentLoaded', async () => {
   try {
@@ -146,6 +159,7 @@ async function scanLocal() {
     }
     status.innerText = `✅ Scan fertig: ${matched} von ${lastDevices.length} Geräten per lokalem Broadcast gematcht.`;
     renderTable(lastDevices);
+    // Falls gerade Suchergebnisse angezeigt werden, mit aktualisierten Werten neu rendern
     if (document.getElementById('searchBox').value.trim()) doSearch();
   } catch (e) {
     status.innerText = 'Fehler: ' + e;
@@ -187,15 +201,19 @@ async function doSearch() {
     }
 
     status.innerText = `${data.matches.length} Treffer (von ${data.total_cached} geladenen Geräten).` + scanAgeText(data.scan_time);
+    lastSearchMatchIds = data.matches.map(m => m.device.id);
     let html = '';
     for (const m of data.matches) {
       const boxId = 'box_' + m.device.id;
       const checkId = 'check_' + m.device.id;
+      const ipInputId = 'ipinput_' + m.device.id;
       html += `<div class="match-block">
         <h3>${m.device.name || '(ohne Namen)'}</h3>
         <pre class="copybox" id="${boxId}">${m.text}</pre>
         <button class="secondary" onclick="copyBox('${boxId}')">📋 Alles kopieren</button>
-        <button onclick="liveVerify('${m.device.id}','${checkId}')">✅ Live-Test (echte Verbindung zum Gerät)</button>
+        <label style="margin-top:12px;">IP manuell (z.B. aus Starlink-App), falls Scan nichts findet</label>
+        <input id="${ipInputId}" placeholder="192.168.x.x" value="${m.device.ip && !m.device.ip.startsWith('145.') ? m.device.ip : ''}">
+        <button onclick="liveVerify('${m.device.id}','${checkId}','${ipInputId}')">✅ Live-Test (echte Verbindung zum Gerät)</button>
         <div id="${checkId}" style="margin-top:8px;font-size:13px;"></div>
       </div>`;
     }
@@ -205,25 +223,107 @@ async function doSearch() {
   }
 }
 
+function _formatClientSide(d) {
+  let lines = [
+    `Name: ${d.name || ''}`,
+    `IP-Adresse: ${d.ip || 'UNBEKANNT – Netzwerk scannen'}`,
+    `Device ID: ${d.id || ''}`,
+    `Local Key: ${d.local_key || ''}`,
+    `Protokoll-Version: ${d.version || 'auto (nicht gescannt)'}`,
+  ];
+  return lines.join('\n');
+}
+
+async function bulkMatch() {
+  const status = document.getElementById('bulkMatchStatus');
+  const text = document.getElementById('ipListArea').value;
+
+  if (!lastSearchMatchIds.length) {
+    status.style.color = '#ff9800';
+    status.innerText = 'Erst oben nach einem Gerätenamen suchen, dann hier zuordnen.';
+    return;
+  }
+  if (!text.trim()) {
+    status.style.color = '#ff9800';
+    status.innerText = 'Bitte IP-Liste einfügen.';
+    return;
+  }
+
+  status.style.color = '#03a9f4';
+  status.innerText = '⏳ Teste IPs gegen die aktuellen Treffer (kann bis zu einer Minute dauern)...';
+
+  try {
+    const res = await fetch('bulk_match', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ips: text, device_ids: lastSearchMatchIds})
+    });
+    const data = await res.json();
+    if (data.error) {
+      status.style.color = '#ff5252';
+      status.innerText = data.error;
+      return;
+    }
+
+    let okCount = 0;
+    const total = Object.keys(data.results).length;
+    for (const [id, r] of Object.entries(data.results)) {
+      const dev = lastDevices.find(d => d.id === id);
+      const box = document.getElementById('box_' + id);
+      const checkDiv = document.getElementById('check_' + id);
+      const ipInput = document.getElementById('ipinput_' + id);
+      if (r.ok) {
+        okCount++;
+        if (dev) { dev.ip = r.ip; }
+        if (box && dev) box.innerText = _formatClientSide(dev);
+        if (ipInput) ipInput.value = r.ip;
+        if (checkDiv) {
+          checkDiv.style.color = '#4caf50';
+          checkDiv.innerText = `✅ Live verifiziert per Bulk-Zuordnung — IP ${r.ip}`;
+        }
+      } else if (checkDiv) {
+        checkDiv.style.color = '#ff9800';
+        checkDiv.innerText = '⚠️ ' + r.reason;
+      }
+    }
+
+    status.style.color = okCount === total ? '#4caf50' : '#ff9800';
+    status.innerText = `Fertig: ${okCount} von ${total} Geräten zugeordnet (${data.responsive_ip_count} von ${data.tested_ip_count} eingefügten IPs haben überhaupt auf Port 6668 reagiert).`;
+  } catch (e) {
+    status.style.color = '#ff5252';
+    status.innerText = 'Fehler: ' + e;
+  }
+}
+
 function copyBox(id) {
   const text = document.getElementById(id).innerText;
   navigator.clipboard.writeText(text).catch(() => {});
 }
 
-async function liveVerify(deviceId, targetDivId) {
+async function liveVerify(deviceId, targetDivId, ipInputId) {
   const div = document.getElementById(targetDivId);
+  const manualIp = ipInputId ? document.getElementById(ipInputId).value.trim() : '';
   div.style.color = '#03a9f4';
   div.innerText = '⏳ Verbinde live mit dem Gerät und frage Status ab...';
   try {
     const res = await fetch('verify', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id: deviceId})
+      body: JSON.stringify({id: deviceId, ip: manualIp})
     });
     const data = await res.json();
     if (data.ok) {
       div.style.color = '#4caf50';
-      div.innerText = '✅ Live verifiziert — IP, Device ID und Local Key wurden gerade erfolgreich gegen das echte Gerät geprüft.';
+      div.innerText = '✅ Live verifiziert' + (manualIp ? ` mit IP ${manualIp}` : '') + ' — IP, Device ID und Local Key wurden gerade erfolgreich gegen das echte Gerät geprüft.';
+      if (manualIp) {
+        const dev = lastDevices.find(d => d.id === deviceId);
+        if (dev) {
+          dev.ip = manualIp;
+          const boxId = 'box_' + deviceId;
+          const box = document.getElementById(boxId);
+          if (box) box.innerText = _formatClientSide(dev);
+        }
+      }
     } else {
       div.style.color = '#ff9800';
       div.innerText = '⚠️ Nicht verifiziert: ' + (data.reason || 'Unbekannter Fehler');
