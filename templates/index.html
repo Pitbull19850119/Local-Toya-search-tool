@@ -70,6 +70,8 @@
     kein Raten anhand des Namens. Dauert je nach Anzahl 10–60 Sekunden.
   </p>
   <textarea id="ipListArea" rows="4" style="width:100%;background:#222;color:#eee;border:1px solid #444;border-radius:6px;padding:8px;box-sizing:border-box;font-size:14px;"></textarea>
+  <button class="secondary" onclick="scanSubnet()">📡 Ganzes lokales Netzwerk automatisch scannen</button>
+  <div id="subnetScanStatus" style="margin-top:6px;font-size:12px;color:#888;"></div>
   <button onclick="bulkMatch()">🔗 IPs den aktuellen Treffern zuordnen</button>
   <div id="bulkMatchStatus" style="margin-top:8px;font-size:13px;"></div>
 </div>
@@ -232,6 +234,31 @@ function _formatClientSide(d) {
     `Protokoll-Version: ${d.version || 'auto (nicht gescannt)'}`,
   ];
   return lines.join('\n');
+}
+
+async function scanSubnet() {
+  const status = document.getElementById('subnetScanStatus');
+  status.style.color = '#03a9f4';
+  status.innerText = '⏳ Scanne lokales /24-Subnetz (ca. 254 Adressen, dauert 10-20 Sekunden)...';
+  try {
+    const res = await fetch('scan_subnet', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (data.error) {
+      status.style.color = '#ff5252';
+      status.innerText = data.error;
+      return;
+    }
+    document.getElementById('ipListArea').value = data.open_ips.join('\n');
+    status.style.color = '#4caf50';
+    status.innerText = `Subnetz ${data.cidr} (eigene IP: ${data.local_ip}) gescannt: ${data.open_ips.length} von ${data.scanned_count} Adressen antworten auf Tuya-Port 6668. Jetzt "IPs zuordnen" klicken.`;
+  } catch (e) {
+    status.style.color = '#ff5252';
+    status.innerText = 'Fehler: ' + e;
+  }
 }
 
 async function bulkMatch() {
