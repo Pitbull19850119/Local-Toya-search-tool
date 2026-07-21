@@ -1,5 +1,6 @@
 import binascii
 import difflib
+import fcntl
 import hashlib
 import hmac
 import json
@@ -375,6 +376,39 @@ def _port_open(ip, port=None, timeout=1.2):
         return True
     except Exception:
         return False
+
+
+def _list_host_interfaces():
+    """Listet alle IPv4-Adressen der Netzwerkschnittstellen des Hosts auf (dank
+    host_network: true sieht der Container die echten Host-Interfaces, nicht nur
+    das isolierte Docker-Netz). Nutzt den SIOCGIFADDR-ioctl, keine externen Tools nötig."""
+    results = []
+    try:
+        names = [n for _, n in socket.if_nameindex() if n != "lo"]
+    except Exception:
+        return results
+    for name in names:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            ip = socket.inet_ntoa(fcntl.ioctl(
+                s.fileno(),
+                0x8915,  # SIOCGIFADDR
+                struct.pack('256s', name[:15].encode())
+            )[20:24])
+            results.append({"interface": name, "ip": ip, "cidr": str(ip_network(ip + "/24", strict=False))})
+        except Exception:
+            continue
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    return results
+
+
+@app.route("/interfaces")
+def interfaces():
+    return jsonify({"interfaces": _list_host_interfaces()})
 
 
 def _detect_local_subnet():
