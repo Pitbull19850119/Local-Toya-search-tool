@@ -8,6 +8,8 @@ import re
 import socket
 import struct
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ipaddress import ip_network
 
 import requests
 import yaml
@@ -375,6 +377,61 @@ def _port_open(ip, port=None, timeout=1.2):
         return False
 
 
+def _detect_local_subnet():
+    """Ermittelt die eigene lokale IP (via ausgehendem Socket, ohne echten Traffic zu senden)
+    und leitet daraus das /24-Subnetz ab. Dank host_network sieht der Container das
+    tatsächliche LAN, nicht das isolierte Docker-Netz."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("1.1.1.1", 80))
+        local_ip = s.getsockname()[0]
+    finally:
+        s.close()
+    network = ip_network(local_ip + "/24", strict=False)
+    return local_ip, str(network)
+
+
+@app.route("/scan_subnet", methods=["POST"])
+def scan_subnet():
+    """Fing-artiger Scan: testet alle Adressen im lokalen /24 parallel auf offenen
+    Tuya-Port (6668). Deutlich schneller als sequentiell (254 Adressen in ca. 10-20s
+    statt mehreren Minuten) durch einen Thread-Pool."""
+    data = request.get_json(force=True) or {}
+    cidr = data.get("cidr", "").strip()
+
+    try:
+        if cidr:
+            network = ip_network(cidr, strict=False)
+            local_ip = None
+        else:
+            local_ip, cidr = _detect_local_subnet()
+            network = ip_network(cidr, strict=False)
+    except Exception as exc:
+        return jsonify({"error": f"Ungültiges Subnetz: {exc}"}), 400
+
+    hosts = [str(ip) for ip in network.hosts()]
+    if len(hosts) > 512:
+        return jsonify({"error": f"Subnetz zu groß ({len(hosts)} Adressen) -- bitte kleineres CIDR angeben."}), 400
+
+    open_ips = []
+    with ThreadPoolExecutor(max_workers=60) as pool:
+        futures = {pool.submit(_port_open, ip, TUYA_LOCAL_PORT, 1.0): ip for ip in hosts}
+        for fut in as_completed(futures):
+            ip = futures[fut]
+            try:
+                if fut.result():
+                    open_ips.append(ip)
+            except Exception:
+                pass
+
+    return jsonify({
+        "cidr": cidr,
+        "local_ip": local_ip,
+        "scanned_count": len(hosts),
+        "open_ips": sorted(open_ips, key=lambda x: tuple(int(p) for p in x.split("."))),
+    })
+
+
 @app.route("/bulk_match", methods=["POST"])
 def bulk_match():
     """Nimmt eine Liste von IPs (z.B. aus der Starlink-App kopiert) und testet sie
@@ -385,7 +442,7 @@ def bulk_match():
     device_ids = data.get("device_ids", [])
 
     candidate_ips = _extract_ips(raw_ips) if isinstance(raw_ips, str) else list(raw_ips)
-    candidate_ips = candidate_ips[:40]  # Obergrenze, damit ein Request nicht ewig läuft
+    candidate_ips = candidate_ips[:80]  # Obergrenze, damit ein Request nicht ewig läuft
 
     devices = [d for d in STATE["devices"] if d.get("id") in device_ids]
     if not devices:

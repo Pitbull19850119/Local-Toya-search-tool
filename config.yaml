@@ -1,5 +1,5 @@
 name: "Tuya Local Key Extractor"
-version: "1.1.0"
+version: "1.2.0"
 slug: "tuya_local_key_extractor"
 description: "Extrahiert Device-IDs, Local Keys und IPs aus deinem Tuya Cloud Account – fertig für localtuya"
 url: "https://github.com/Pitbull19850119/tuya-local-key-extractor-addon"
