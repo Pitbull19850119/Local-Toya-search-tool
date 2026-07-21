@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import socket
 import struct
 import time
@@ -356,14 +357,85 @@ def verify_device_live(ip, device_id, local_key, version, timeout=5):
             pass
 
 
+def _extract_ips(text):
+    """Findet alle IPv4-Adressen in einem beliebigen eingefügten Text (z.B. Starlink-App-Export)."""
+    found = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', text)
+    return list(dict.fromkeys(found))  # Duplikate raus, Reihenfolge behalten
+
+
+def _port_open(ip, port=None, timeout=1.2):
+    port = port or TUYA_LOCAL_PORT
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((ip, port))
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+@app.route("/bulk_match", methods=["POST"])
+def bulk_match():
+    """Nimmt eine Liste von IPs (z.B. aus der Starlink-App kopiert) und testet sie
+    per ECHTEM Krypto-Handshake (verify_device_live) gegen die übergebenen Geräte.
+    Kein Namensraten -- nur eine erfolgreiche Entschlüsselung zählt als Treffer."""
+    data = request.get_json(force=True) or {}
+    raw_ips = data.get("ips", "")
+    device_ids = data.get("device_ids", [])
+
+    candidate_ips = _extract_ips(raw_ips) if isinstance(raw_ips, str) else list(raw_ips)
+    candidate_ips = candidate_ips[:40]  # Obergrenze, damit ein Request nicht ewig läuft
+
+    devices = [d for d in STATE["devices"] if d.get("id") in device_ids]
+    if not devices:
+        return jsonify({"error": "Keine passenden Geräte im Cache gefunden -- erst suchen, dann zuordnen."}), 400
+    if not candidate_ips:
+        return jsonify({"error": "Keine IP-Adressen im eingefügten Text gefunden."}), 400
+
+    # Schritt 1: schneller Vorfilter -- nur IPs behalten, die ueberhaupt auf Port 6668 antworten
+    open_ips = [ip for ip in candidate_ips if _port_open(ip)]
+
+    results = {}
+    used_ips = set()
+    for dev in devices:
+        match_ip = None
+        for ip in open_ips:
+            if ip in used_ips:
+                continue
+            r = verify_device_live(ip, dev.get("id"), dev.get("local_key"), dev.get("version"), timeout=3)
+            if r.get("ok"):
+                match_ip = ip
+                used_ips.add(ip)
+                break
+        if match_ip:
+            dev["ip"] = match_ip
+            results[dev["id"]] = {"ok": True, "ip": match_ip}
+        else:
+            results[dev["id"]] = {"ok": False, "reason": "Keine der getesteten IPs hat mit diesem Local Key funktioniert (Gerät evtl. offline oder nicht in der Liste)."}
+
+    save_state()
+    return jsonify({
+        "results": results,
+        "tested_ip_count": len(candidate_ips),
+        "responsive_ip_count": len(open_ips),
+    })
+
+
 @app.route("/verify", methods=["POST"])
 def verify():
     data = request.get_json(force=True) or {}
     device_id = data.get("id")
+    manual_ip = (data.get("ip") or "").strip()
     dev = next((d for d in STATE["devices"] if d.get("id") == device_id), None)
     if not dev:
         return jsonify({"ok": False, "reason": "Gerät nicht im Cache gefunden -- erneut laden."}), 404
-    result = verify_device_live(dev.get("ip"), dev.get("id"), dev.get("local_key"), dev.get("version"))
+    ip_to_use = manual_ip or dev.get("ip")
+    result = verify_device_live(ip_to_use, dev.get("id"), dev.get("local_key"), dev.get("version"))
+    if result.get("ok") and manual_ip:
+        # Manuell bestätigte IP dauerhaft übernehmen (z.B. aus Starlink-App abgelesen)
+        dev["ip"] = manual_ip
+        save_state()
     return jsonify(result)
 
 
