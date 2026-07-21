@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Tuya Local Key Extractor</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; background:#111; color:#eee; padding:20px; }
+  h1 { color:#03a9f4; font-size:20px; }
+  h2 { color:#03a9f4; font-size:15px; margin-top:28px; }
+  label { display:block; margin-top:10px; font-size:13px; color:#aaa; }
+  input, select { width:100%; padding:8px; margin-top:4px; background:#222; border:1px solid #444; color:#eee; border-radius:6px; box-sizing:border-box; font-size:15px; }
+  button { margin-top:12px; padding:10px 18px; background:#03a9f4; border:none; border-radius:6px; color:#000; font-weight:bold; cursor:pointer; }
+  button:hover { background:#0288d1; }
+  button.secondary { background:#333; color:#eee; }
+  table { width:100%; border-collapse: collapse; margin-top:12px; font-size:12px; }
+  th, td { border:1px solid #333; padding:6px; text-align:left; }
+  th { background:#1a1a1a; }
+  .err { color:#ff5252; margin-top:10px; }
+  #loading { display:none; color:#03a9f4; margin-top:10px; }
+  .hint { background:#332900; border:1px solid #665500; padding:8px; border-radius:6px; font-size:12px; margin:10px 0; }
+  .match-block { background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:12px; margin-top:12px; }
+  .match-block h3 { margin:0 0 8px 0; font-size:14px; color:#4fc3f7; }
+  pre.copybox { background:#000; border:1px solid #333; border-radius:6px; padding:10px; font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-all; user-select:all; }
+  details { margin-top:20px; }
+  summary { cursor:pointer; color:#4fc3f7; font-size:13px; }
+  #searchStatus { font-size:12px; color:#888; margin-top:6px; }
+</style>
+</head>
+<body>
+<h1>🔑 Tuya Local Key Extractor</h1>
+<p>Verbinde einmal mit deinem Tuya Account, dann Gerätenamen eingeben und die Werte für localtuya bekommen.</p>
+
+<label>Access ID / Client ID</label>
+<input id="access_id" value="{{ options.access_id }}">
+
+<label>Access Secret</label>
+<input id="access_secret" type="password" value="{{ options.access_secret }}">
+
+<label>Region</label>
+<select id="region">
+  <option value="eu" {{ 'selected' if options.region=='eu' else '' }}>Europa (eu)</option>
+  <option value="us" {{ 'selected' if options.region=='us' else '' }}>USA (us)</option>
+  <option value="cn" {{ 'selected' if options.region=='cn' else '' }}>China (cn)</option>
+  <option value="in" {{ 'selected' if options.region=='in' else '' }}>Indien (in)</option>
+</select>
+
+<label>Tuya Account Username (E-Mail oder Telefonnummer, wie in Smart Life / Tuya Smart App)</label>
+<input id="username" value="{{ options.username }}">
+
+<label>Optional: UID direkt angeben (falls Username-Suche fehlschlägt)</label>
+<input id="uid" placeholder="uid... (optional)">
+
+<button onclick="runExtract()">Verbinden & Geräte laden</button>
+<button class="secondary" onclick="scanLocal()">🔍 Netzwerk scannen (IP + Version)</button>
+<div id="loading">⏳ Lade Daten von Tuya Cloud...</div>
+<div id="scanStatus" style="color:#03a9f4;margin-top:8px;font-size:13px;"></div>
+<div id="error" class="err"></div>
+<div id="connectSummary" style="font-size:13px;color:#888;margin-top:6px;"></div>
+
+<h2>Gerätename eingeben</h2>
+<input id="searchBox" placeholder="z.B. Deckenlampe Kinderzimmer 1" oninput="onSearchInput()" onkeydown="if(event.key==='Enter') doSearch();">
+<div id="searchStatus"></div>
+<div id="searchResults"></div>
+
+<details>
+  <summary>Alle geladenen Geräte anzeigen (Tabelle)</summary>
+  <div id="tableArea"></div>
+</details>
+
+<script>
+let lastDevices = [];
+let searchTimer = null;
+
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const res = await fetch('state');
+    const data = await res.json();
+    if (data.devices && data.devices.length) {
+      lastDevices = data.devices;
+      renderTable(lastDevices);
+      let txt = `📦 ${data.devices.length} Geräte aus vorherigem Lauf geladen (persistenter Cache)`;
+      txt += scanAgeText(data.scan_time);
+      txt += ' — direkt suchen möglich, oder "Verbinden" für frische Cloud-Daten.';
+      document.getElementById('connectSummary').innerText = txt;
+    }
+  } catch (e) { /* Cache leer oder Addon frisch gestartet - kein Problem */ }
+});
+
+async function runExtract() {
+  document.getElementById('error').innerText = '';
+  document.getElementById('connectSummary').innerText = '';
+  document.getElementById('loading').style.display = 'block';
+
+  const payload = {
+    access_id: document.getElementById('access_id').value,
+    access_secret: document.getElementById('access_secret').value,
+    region: document.getElementById('region').value,
+    username: document.getElementById('username').value,
+    uid: document.getElementById('uid').value,
+  };
+
+  try {
+    const res = await fetch('extract', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    document.getElementById('loading').style.display = 'none';
+
+    if (data.error) {
+      document.getElementById('error').innerText = data.error;
+      return;
+    }
+
+    lastDevices = data.devices;
+    document.getElementById('connectSummary').innerText =
+      `✅ Verbunden. UID: ${data.uid} — ${data.devices.length} Geräte geladen. Starte automatisch Netzwerk-Scan...`;
+    renderTable(data.devices);
+    scanLocal();
+  } catch (e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').innerText = 'Fehler: ' + e;
+  }
+}
+
+async function scanLocal() {
+  const status = document.getElementById('scanStatus');
+  status.innerText = '⏳ Scanne lokales Netzwerk (ca. 15 Sekunden, Geräte müssen online & im gleichen LAN sein)...';
+  try {
+    const res = await fetch('scan_local', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({timeout: 15})
+    });
+    const data = await res.json();
+    if (data.error) {
+      status.innerText = 'Fehler beim Scan: ' + data.error;
+      return;
+    }
+    const found = data.found || {};
+    let matched = 0;
+    for (const dev of lastDevices) {
+      const hit = found[dev.id];
+      if (hit) { dev.ip = hit.ip; dev.version = hit.version; matched++; }
+    }
+    status.innerText = `✅ Scan fertig: ${matched} von ${lastDevices.length} Geräten per lokalem Broadcast gematcht.`;
+    renderTable(lastDevices);
+    if (document.getElementById('searchBox').value.trim()) doSearch();
+  } catch (e) {
+    status.innerText = 'Fehler: ' + e;
+  }
+}
+
+function scanAgeText(scanTime) {
+  if (!scanTime) return ' (noch nicht gescannt)';
+  const mins = Math.round((Date.now() / 1000 - scanTime) / 60);
+  if (mins < 1) return ' — Scan vor <1 Min.';
+  return ` — Scan vor ${mins} Min.`;
+}
+
+function onSearchInput() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(doSearch, 300);
+}
+
+async function doSearch() {
+  const q = document.getElementById('searchBox').value.trim();
+  const resultsDiv = document.getElementById('searchResults');
+  const status = document.getElementById('searchStatus');
+  if (!q) { resultsDiv.innerHTML = ''; status.innerText = ''; return; }
+
+  try {
+    const res = await fetch('search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+
+    if (!data.total_cached) {
+      status.innerText = 'Noch keine Geräte geladen — zuerst "Verbinden & Geräte laden" klicken.';
+      resultsDiv.innerHTML = '';
+      return;
+    }
+
+    if (!data.matches.length) {
+      status.innerText = 'Kein Gerät gefunden.';
+      resultsDiv.innerHTML = '';
+      return;
+    }
+
+    status.innerText = `${data.matches.length} Treffer (von ${data.total_cached} geladenen Geräten).` + scanAgeText(data.scan_time);
+    let html = '';
+    for (const m of data.matches) {
+      const boxId = 'box_' + m.device.id;
+      const checkId = 'check_' + m.device.id;
+      html += `<div class="match-block">
+        <h3>${m.device.name || '(ohne Namen)'}</h3>
+        <pre class="copybox" id="${boxId}">${m.text}</pre>
+        <button class="secondary" onclick="copyBox('${boxId}')">📋 Alles kopieren</button>
+        <button onclick="liveVerify('${m.device.id}','${checkId}')">✅ Live-Test (echte Verbindung zum Gerät)</button>
+        <div id="${checkId}" style="margin-top:8px;font-size:13px;"></div>
+      </div>`;
+    }
+    resultsDiv.innerHTML = html;
+  } catch (e) {
+    status.innerText = 'Fehler: ' + e;
+  }
+}
+
+function copyBox(id) {
+  const text = document.getElementById(id).innerText;
+  navigator.clipboard.writeText(text).catch(() => {});
+}
+
+async function liveVerify(deviceId, targetDivId) {
+  const div = document.getElementById(targetDivId);
+  div.style.color = '#03a9f4';
+  div.innerText = '⏳ Verbinde live mit dem Gerät und frage Status ab...';
+  try {
+    const res = await fetch('verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: deviceId})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      div.style.color = '#4caf50';
+      div.innerText = '✅ Live verifiziert — IP, Device ID und Local Key wurden gerade erfolgreich gegen das echte Gerät geprüft.';
+    } else {
+      div.style.color = '#ff9800';
+      div.innerText = '⚠️ Nicht verifiziert: ' + (data.reason || 'Unbekannter Fehler');
+    }
+  } catch (e) {
+    div.style.color = '#ff5252';
+    div.innerText = 'Fehler beim Live-Test: ' + e;
+  }
+}
+
+function renderTable(devices) {
+  let html = `<div class="hint">
+    ⚠️ localtuya akzeptiert seit v4.0.0 <b>kein YAML mehr</b> — nur noch den UI-Dialog
+    (Settings → Devices & Services → LocalTuya → Add device). localtuya kann Access
+    ID/Secret auch direkt selbst entgegennehmen (Cloud-API-Option im Dialog).
+  </div>`;
+  html += '<button class="secondary" onclick="downloadYaml()">⬇️ Referenzliste (YAML) herunterladen</button>';
+  html += '<table id="devTable"><tr><th>Name</th><th>Device ID</th><th>Local Key</th><th>IP</th><th>Version</th><th>Online</th><th>Kategorie</th></tr>';
+  for (const d of devices) {
+    const subTag = d.sub ? ' <span style="color:#ff9800;">(Sub-Gerät)</span>' : '';
+    html += `<tr><td>${d.name||''}${subTag}</td><td>${d.id||''}</td><td>${d.local_key||''}</td><td>${d.ip||'?'}</td><td>${d.version||'?'}</td><td>${d.online===true?'✅':(d.online===false?'❌':'?')}</td><td>${d.category||''}</td></tr>`;
+  }
+  html += '</table>';
+  document.getElementById('tableArea').innerHTML = html;
+}
+
+async function downloadYaml() {
+  const res = await fetch('download.yaml', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({devices: lastDevices})
+  });
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'localtuya_devices_reference.yaml';
+  a.click();
+}
+</script>
+</body>
+</html>
