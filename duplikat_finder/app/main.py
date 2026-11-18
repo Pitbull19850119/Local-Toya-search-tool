@@ -155,6 +155,33 @@ def sizes():
     return out
 
 
+def empty_worker():
+    import shutil as sh
+    STATE["emptying"] = True
+    try:
+        seen = set()
+        for k, r in ROOT.items():
+            trash = os.path.realpath(os.path.join(r["mnt"], "_Papierkorb"))
+            if trash in seen or not os.path.isdir(trash):
+                continue
+            seen.add(trash)
+            n = sum(len(f) for _, _, f in os.walk(trash))
+            log(f"Leere Papierkorb {k.upper()} ({n} Dateien) …")
+            sh.rmtree(trash)
+            log(f"Papierkorb {k.upper()} geleert.")
+    except Exception as ex:  # noqa: BLE001
+        log(f"Fehler beim Leeren: {ex}")
+    finally:
+        STATE["emptying"] = False
+
+
+@app.route("/empty_trash", methods=["POST"])
+def empty_trash():
+    if request.form.get("confirm") == "LEEREN" and not STATE.get("emptying"):
+        threading.Thread(target=empty_worker, daemon=True).start()
+    return redirect("./")
+
+
 @app.route("/scan", methods=["POST"])
 def do_scan():
     threading.Thread(target=scan, daemon=True).start()

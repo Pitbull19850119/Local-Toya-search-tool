@@ -81,6 +81,12 @@ pre{background:var(--bg);padding:8px;border-radius:8px;font-size:12px;max-height
   </div>{% endfor %}
 </div>{% endfor %}
 </form>{% elif s.scanned %}<div class="card">Keine Duplikate innerhalb einer Festplatte. 🎉</div>{% endif %}
+<div class="card"><b>Papierkorb</b>
+  <p class="k">Löscht den Ordner _Papierkorb auf beiden Freigaben endgültig.</p>
+  <form method="post" action="empty_trash" onsubmit="return confirm('Papierkorb endgültig leeren? Das kann nicht rückgängig gemacht werden.')">
+    <input type="hidden" name="confirm" value="LEEREN">
+    <button class="ba" {% if s.emptying %}disabled{% endif %}>{{ "Wird geleert …" if s.emptying else "Papierkorb endgültig leeren" }}</button>
+  </form></div>
 <div class="card"><div class="k">Protokoll</div><pre>{% for l in s.log|reverse %}{{ l }}
 {% endfor %}</pre></div>
 </main>
