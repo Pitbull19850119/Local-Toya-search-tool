@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Duplikate</title>
-{% if s.scanning %}<meta http-equiv="refresh" content="5">{% endif %}
+{% if s.scanning or s.bulk %}<meta http-equiv="refresh" content="4">{% endif %}
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--text:#1c1e21;--muted:#6b7280;--line:#e5e7eb;--a:#2563eb;--b:#9333ea;--ok:#16a34a}
 @media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1c2026;--text:#e6e8eb;--muted:#9aa3ad;--line:#2c323a}}
@@ -14,6 +14,8 @@ main{max-width:900px;margin:0 auto;padding:16px}h1{font-size:22px;margin:4px 0 1
 button{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
 .ba{border-color:var(--a);color:var(--a)}.bb{border-color:var(--b);color:var(--b)}
 .done{opacity:.5}.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line)}
+.bar{position:sticky;top:0;z-index:5}
+input[type=checkbox]{width:20px;height:20px;vertical-align:middle;margin-right:8px}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 pre{background:var(--bg);padding:8px;border-radius:8px;font-size:12px;max-height:180px;overflow:auto;margin:0}
 </style></head><body><main>
@@ -33,19 +35,36 @@ pre{background:var(--bg);padding:8px;border-radius:8px;font-size:12px;max-height
   <div class="row"><form method="post" action="scan"><button {% if s.scanning %}disabled{% endif %}>{{ "Wird eingelesen …" if s.scanning else "Neu vergleichen" }}</button></form></div>
   <p class="k">„Entfernen“ verschiebt nur in den Ordner <b>_Papierkorb</b> auf derselben Freigabe. Endgültig löschen kannst du ihn später selbst.</p>
 </div>
+{% if s.bulk %}<div class="card">⏳ Verschiebe aus {{ s.bulk.side }} in den Papierkorb: {{ s.bulk.done }} / {{ s.bulk.total }}</div>{% endif %}
+{% if s.groups %}<form method="post" action="bulk" id="bulkform">
+<div class="card bar">
+  <div class="row" style="margin-top:0">
+    <button type="button" onclick="setAll(true)">Alle auswählen</button>
+    <button type="button" onclick="setAll(false)">Alle abwählen</button>
+    <span class="k" id="cnt" style="align-self:center">0 ausgewählt</span>
+  </div>
+  <div class="row">
+    <button class="ba" name="action" value="a" onclick="return go('A')">Ausgewählte in A entfernen</button>
+    <button class="bb" name="action" value="b" onclick="return go('B')">Ausgewählte in B entfernen</button>
+    <button name="action" value="keep">Ausgewählte behalten</button>
+  </div>
+</div>
 {% for g in s.groups %}{% set d = s.decided.get(g.id) %}
 <div class="card {% if d %}done{% endif %}" id="g{{ loop.index0 }}">
-  <div><b>{{ g.name }}</b> <span class="k">· {{ g.size_h }}</span></div>
+  <div>{% if not d %}<input type="checkbox" class="sel" name="sel" value="{{ g.id }}" onchange="count()">{% endif %}<b>{{ g.name }}</b> <span class="k">· {{ g.size_h }}</span></div>
   {% for p in g.a %}<div class="path pa">A: {{ p }}</div>{% endfor %}
   {% for p in g.b %}<div class="path pb">B: {{ p }}</div>{% endfor %}
   {% if d %}<div class="row"><span class="tag">✓ {{ d }}</span></div>{% else %}
-  <form class="row" method="post" action="decide"><input type="hidden" name="id" value="{{ g.id }}">
-    <button class="ba" name="action" value="a">In A entfernen</button>
-    <button class="bb" name="action" value="b">In B entfernen</button>
-    <button name="action" value="keep">Beide behalten</button>
-  </form>{% endif %}
+  {% endif %}
 </div>
-{% else %}{% if s.scanned %}<div class="card">Keine doppelten Dateien gefunden. 🎉</div>{% endif %}{% endfor %}
+{% endfor %}</form>{% elif s.scanned %}<div class="card">Keine doppelten Dateien gefunden. 🎉</div>{% endif %}
 <div class="card"><div class="k">Protokoll</div><pre>{% for l in s.log|reverse %}{{ l }}
 {% endfor %}</pre></div>
-</main></body></html>
+</main>
+<script>
+function boxes(){return document.querySelectorAll('input.sel');}
+function count(){var n=0;boxes().forEach(function(b){if(b.checked)n++;});document.getElementById('cnt').textContent=n+' ausgewählt';return n;}
+function setAll(v){boxes().forEach(function(b){b.checked=v;});count();}
+function go(side){var n=count();if(!n){alert('Nichts ausgewählt');return false;}
+return confirm(n+' Einträge aus Ordner '+side+' in den Papierkorb verschieben?');}
+</script></body></html>

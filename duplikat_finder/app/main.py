@@ -125,6 +125,34 @@ def do_scan():
     return redirect("./")
 
 
+def bulk_worker(ids, side):
+    STATE["bulk"] = {"total": len(ids), "done": 0, "side": side.upper()}
+    for gid in ids:
+        group = next((g for g in STATE["groups"] if g["id"] == gid), None)
+        if group and gid not in STATE["decided"]:
+            try:
+                for rel in group[side]:
+                    to_trash(side, rel)
+                STATE["decided"][gid] = f"aus {side.upper()} entfernt"
+            except Exception as ex:  # noqa: BLE001
+                log(f"Fehler bei {group['name']}: {ex}")
+        STATE["bulk"]["done"] += 1
+    log(f"{len(ids)} Einträge aus {side.upper()} in den Papierkorb verschoben.")
+    STATE["bulk"] = None
+
+
+@app.route("/bulk", methods=["POST"])
+def bulk():
+    ids = request.form.getlist("sel")
+    side = request.form.get("action")
+    if side in ("a", "b") and ids and not STATE.get("bulk"):
+        threading.Thread(target=bulk_worker, args=(ids, side), daemon=True).start()
+    elif side == "keep":
+        for gid in ids:
+            STATE["decided"].setdefault(gid, "beide behalten")
+    return redirect("./")
+
+
 @app.route("/decide", methods=["POST"])
 def decide():
     gid, action = request.form["id"], request.form["action"]

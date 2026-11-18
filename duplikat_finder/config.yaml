@@ -1,5 +1,5 @@
 name: "Duplikat-Finder"
-version: "0.1.0"
+version: "0.2.0"
 slug: "duplikat_finder"
 description: "Vergleicht zwei Netzwerkordner und zeigt doppelte Dateien – du entscheidest, was in den Papierkorb kommt"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
