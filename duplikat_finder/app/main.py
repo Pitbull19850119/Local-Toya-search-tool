@@ -177,7 +177,8 @@ def empty_worker():
 
 @app.route("/empty_trash", methods=["POST"])
 def empty_trash():
-    if request.form.get("confirm") == "LEEREN" and not STATE.get("emptying"):
+    data = request.form.to_dict() or (request.get_json(silent=True) or {})
+    if data.get("confirm") == "LEEREN" and not STATE.get("emptying"):
         threading.Thread(target=empty_worker, daemon=True).start()
     return redirect("./")
 
