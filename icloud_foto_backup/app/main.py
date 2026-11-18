@@ -387,9 +387,67 @@ def _check_albums():
     save_state()
 
 
+def same_content(a, b, size):
+    """Gleicher Inhalt? Vergleicht Anfang, Mitte und Ende (je 64 KB)."""
+    try:
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            for off in (0, max(0, size // 2 - 32768), max(0, size - 65536)):
+                fa.seek(off)
+                fb.seek(off)
+                if fa.read(65536) != fb.read(65536):
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def index_existing():
+    """(dateiname, größe) -> Pfad für alle Fotos außerhalb von Alben/."""
+    idx = {}
+    for root, dirs, files in os.walk(WD_ROOT):
+        if os.path.relpath(root, WD_ROOT) == ".":
+            dirs[:] = [d for d in dirs if d != "Alben" and not d.startswith(".")]
+        else:
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for f in files:
+            if os.path.splitext(f)[1].lower() in PHOTO_EXT:
+                full = os.path.join(root, f)
+                try:
+                    idx.setdefault((f.lower(), os.path.getsize(full)), full)
+                except OSError:
+                    pass
+    return idx
+
+
+def remove_new_duplicates(dest, idx):
+    """Entfernt NUR frisch geladene Kopien, die es schon in einem alten Ordner gibt
+    (gleicher Name, gleiche Größe, gleicher Inhalt). Alte Fotos bleiben unberührt."""
+    removed = 0
+    if not os.path.isdir(dest):
+        return 0
+    known = set(STATE.setdefault("seen_files", {}).get(dest, []))
+    for f in os.listdir(dest):
+        full = os.path.join(dest, f)
+        if f in known or not os.path.isfile(full):
+            continue
+        size = os.path.getsize(full)
+        other = idx.get((f.lower(), size))
+        if other and other != full and same_content(full, other, size):
+            os.remove(full)  # nur die neue, identische Kopie
+            removed += 1
+        else:
+            known.add(f)
+    STATE["seen_files"][dest] = sorted(known)
+    return removed
+
+
 def download_albums():
     albums = STATE.get("albums") or []
     os.makedirs(ALBUM_ROOT, exist_ok=True)
+    log("Lese vorhandene Fotos für den Doppelt-Check ein …")
+    idx = index_existing()
+    log(f"{len(idx)} vorhandene Fotos außerhalb von Alben/.")
+    week = 7 * 24 * 3600
     for album in albums:
         if not in_window():
             return
@@ -397,6 +455,9 @@ def download_albums():
         if sug and sug["status"] == "pending":
             log(f"„{album}“ übersprungen – wartet auf deine Bestätigung.")
             continue
+        done = STATE["done"].get(album)
+        if done and time.time() - datetime.fromisoformat(done).timestamp() < week:
+            continue  # vollständig gesichert, erst nach einer Woche erneut prüfen
         if free_gb() < OPT["min_free_gb"]:
             notify(f"Auf der WD sind nur noch {free_gb():.0f} GB frei. "
                    "Das Backup pausiert, bis wieder Platz ist.", key="space")
@@ -408,10 +469,17 @@ def download_albums():
         code, _ = run_icloudpd(
             ["--album", album, "-d", dest, "--folder-structure", "none"],
             stop_at_window_end=True)
+        dup = remove_new_duplicates(dest, idx)
+        if dup:
+            log(f"  {dup} Fotos gibt es schon in alten Ordnern – nicht doppelt gespeichert.")
+        if os.path.isdir(dest) and not os.listdir(dest):
+            os.rmdir(dest)  # leerer, eben angelegter Ordner
         if code == 0:
             with LOCK:
                 STATE["done"][album] = datetime.now().isoformat(timespec="minutes")
                 save_state()
+        else:
+            save_state()
 
 
 def nightly_job():
