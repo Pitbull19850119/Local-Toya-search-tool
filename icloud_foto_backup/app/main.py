@@ -64,11 +64,11 @@ def load_state():
 
 
 STATE = load_state()
-if STATE.get("match_version") != 2:
+if STATE.get("match_version") != 3:
     STATE["suggestions"] = {k: v for k, v in STATE.get("suggestions", {}).items()
                             if v.get("status") != "pending"}
     STATE["checked"] = []
-    STATE["match_version"] = 2
+    STATE["match_version"] = 3
 
 
 def save_state():
@@ -243,11 +243,17 @@ def album_filenames(album):
     tmp = "/tmp/empty-listing"
     os.makedirs(tmp, exist_ok=True)
     code, lines = run_icloudpd(
-        ["--album", album, "-d", tmp, "--folder-structure", "none",
+        ["--album", album, "-d", tmp, "--folder-structure", "{:%Y-%m}",
          "--only-print-filenames"], collect=True)
     if code != 0:
         return None
-    return {stem(l) for l in lines if l.startswith(tmp)}
+    out = set()
+    for l in lines:
+        if l.startswith(tmp + "/"):
+            parts = l[len(tmp) + 1:].split("/")
+            if len(parts) >= 2:
+                out.add(f"{parts[0]}|{stem(parts[-1])}")
+    return out
 
 
 def index_old_folders():
@@ -259,13 +265,28 @@ def index_old_folders():
             dirs[:] = [d for d in dirs if d != "Alben" and not d.startswith(".")]
             continue
         dirs[:] = [d for d in dirs if not d.startswith(".")]
-        stems = {stem(f) for f in files if os.path.splitext(f)[1].lower() in PHOTO_EXT}
-        if stems:
-            result[rel] = stems
+        keys, count = set(), 0
+        for f in files:
+            if os.path.splitext(f)[1].lower() not in PHOTO_EXT:
+                continue
+            try:
+                t = datetime.fromtimestamp(os.path.getmtime(os.path.join(root, f)))
+            except OSError:
+                continue
+            count += 1
+            s_ = stem(f)
+            # Monat der Datei ± 1 (Zeitzonen / Export-Ungenauigkeit)
+            for d in (-1, 0, 1):
+                m = t.month + d
+                y = t.year + (m - 1) // 12
+                m = (m - 1) % 12 + 1
+                keys.add(f"{y:04d}-{m:02d}|{s_}")
+        if count:
+            result[rel] = (keys, count)
     return result
 
 
-NAMES_FILE = "/data/album_names.json"
+NAMES_FILE = "/data/album_names_v2.json"
 
 
 def load_names():
@@ -335,11 +356,11 @@ def _check_albums():
         if not names or (sug and sug["status"] != "pending"):
             continue
         best, best_j, best_hits = None, 0.0, 0
-        for folder, stems in old.items():
-            hits = len(names & stems)
+        for folder, (keys, count) in old.items():
+            hits = len(names & keys)
             if not hits:
                 continue
-            j = hits / (len(names) + len(stems) - hits)
+            j = hits / (len(names) + count - hits)
             if j > best_j:
                 best, best_j, best_hits = folder, j, hits
         if best and best_j >= thr and safe_name(album) != os.path.basename(best):
