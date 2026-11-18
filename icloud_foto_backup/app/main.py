@@ -64,6 +64,11 @@ def load_state():
 
 
 STATE = load_state()
+if STATE.get("match_version") != 2:
+    STATE["suggestions"] = {k: v for k, v in STATE.get("suggestions", {}).items()
+                            if v.get("status") != "pending"}
+    STATE["checked"] = []
+    STATE["match_version"] = 2
 
 
 def save_state():
@@ -260,44 +265,102 @@ def index_old_folders():
     return result
 
 
+NAMES_FILE = "/data/album_names.json"
+
+
+def load_names():
+    try:
+        with open(NAMES_FILE) as f:
+            return {k: set(v) for k, v in json.load(f).items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def save_names(cache):
+    tmp = NAMES_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({k: sorted(v) for k, v in cache.items()}, f)
+    os.replace(tmp, NAMES_FILE)
+
+
+CHECK_LOCK = threading.Lock()
+
+
 def check_albums():
-    """Vergleicht iCloud-Alben mit vorhandenen Ordnern und erstellt Vorschläge."""
+    if not CHECK_LOCK.acquire(blocking=False):
+        log("Albenprüfung läuft schon – warte darauf.")
+        with CHECK_LOCK:
+            return
+    try:
+        _check_albums()
+    finally:
+        CHECK_LOCK.release()
+
+
+def _check_albums():
+    """Vergleicht iCloud-Alben mit vorhandenen Ordnern und erstellt Vorschläge.
+
+    Ähnlichkeit = gemeinsame Dateinamen / alle Dateinamen beider Seiten
+    (Jaccard). Jeder alte Ordner wird höchstens einem Album vorgeschlagen.
+    """
     if not authenticate():
         return
     albums = list_albums()
     log(f"{len(albums)} Alben in iCloud gefunden.")
-    old = index_old_folders()
-    log(f"{len(old)} vorhandene Ordner auf der WD eingelesen.")
-    thr = OPT["match_threshold"] / 100
+    if not albums:
+        return
     with LOCK:
         STATE["albums"] = albums
-    checked = set(STATE.setdefault("checked", []))
-    for album in albums:
-        if album in STATE["suggestions"] or album in checked:
-            continue
+    cache = load_names()
+    todo = [a for a in albums if a not in cache]
+    if todo:
+        log(f"Lese Dateilisten von {len(todo)} Alben (einmalig, dauert) …")
+    for i, album in enumerate(todo, 1):
         names = album_filenames(album)
         if names is None:
             continue
-        with LOCK:
-            STATE["checked"].append(album)
-        if not names:
+        cache[album] = names
+        if i % 10 == 0:
+            save_names(cache)
+            log(f"  {i}/{len(todo)} Alben eingelesen")
+    save_names(cache)
+
+    old = index_old_folders()
+    log(f"{len(old)} vorhandene Ordner auf der WD eingelesen.")
+    thr = OPT["match_threshold"] / 100
+    candidates = []
+    for album in albums:
+        names = cache.get(album)
+        sug = STATE["suggestions"].get(album)
+        if not names or (sug and sug["status"] != "pending"):
             continue
-        best, best_hits = None, 0
+        best, best_j, best_hits = None, 0.0, 0
         for folder, stems in old.items():
             hits = len(names & stems)
-            if hits > best_hits:
-                best, best_hits = folder, hits
-        pct = best_hits / len(names)
-        if best and pct >= thr and safe_name(album) != os.path.basename(best):
-            with LOCK:
-                STATE["suggestions"][album] = {
-                    "folder": best, "hits": best_hits, "total": len(names),
-                    "percent": round(pct * 100), "status": "pending"}
-                save_state()
-            log(f"Vorschlag: „{best}“ → „{album}“ ({round(pct*100)} %)")
-    pending = sum(1 for s in STATE["suggestions"].values() if s["status"] == "pending")
-    if pending:
-        notify(f"{pending} alte Ordner passen zu iCloud-Alben. Bitte in Home Assistant "
+            if not hits:
+                continue
+            j = hits / (len(names) + len(stems) - hits)
+            if j > best_j:
+                best, best_j, best_hits = folder, j, hits
+        if best and best_j >= thr and safe_name(album) != os.path.basename(best):
+            candidates.append((best_j, album, best, best_hits, len(names)))
+    used = {s["folder"] for s in STATE["suggestions"].values()
+            if s["status"] in ("accepted", "rejected")}
+    fresh = {}
+    for j, album, folder, hits, total in sorted(candidates, reverse=True):
+        if folder in used:
+            continue
+        used.add(folder)
+        fresh[album] = {"folder": folder, "hits": hits, "total": total,
+                        "percent": round(j * 100), "status": "pending"}
+    with LOCK:
+        for a in [a for a, s in STATE["suggestions"].items() if s["status"] == "pending"]:
+            del STATE["suggestions"][a]
+        STATE["suggestions"].update(fresh)
+        save_state()
+    log(f"{len(fresh)} Umbenennungsvorschläge.")
+    if fresh:
+        notify(f"{len(fresh)} alte Ordner passen zu iCloud-Alben. Bitte in Home Assistant "
                "unter „Foto-Backup“ prüfen und bestätigen.", key="suggest", every_h=48)
     STATE["last_check"] = datetime.now().isoformat(timespec="minutes")
     save_state()
