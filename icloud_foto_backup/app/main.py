@@ -101,6 +101,8 @@ def notify(message, title="Foto-Backup", key=None, every_h=20):
 
 
 def in_window(now=None):
+    if STATE.get("run_now"):
+        return True
     h = (now or datetime.now()).hour
     s, e = OPT["start_hour"], OPT["end_hour"]
     return (s <= h < e) if s < e else (h >= s or h < e)
@@ -441,61 +443,135 @@ def remove_new_duplicates(dest, idx):
     return removed
 
 
+ICLOUD_ROOT = os.path.join(WD_ROOT, "iCloud")
+TRASH_ROOT = os.path.join(WD_ROOT, "_Papierkorb")
+SKIP_DIRS = {"iCloud", "Alben", "_Papierkorb"}
+
+
+def index_old():
+    """(dateiname, größe) -> [Pfade] aller alten Fotos (außer iCloud/, Papierkorb)."""
+    idx = {}
+    for root, dirs, files in os.walk(WD_ROOT):
+        if os.path.relpath(root, WD_ROOT) == ".":
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        else:
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for f in files:
+            if os.path.splitext(f)[1].lower() in PHOTO_EXT:
+                full = os.path.join(root, f)
+                try:
+                    idx.setdefault((f.lower(), os.path.getsize(full)), []).append(full)
+                except OSError:
+                    pass
+    return idx
+
+
+def trash_old_copies(dest, idx):
+    """Für jedes Foto im neuen Album-Ordner: identische ALTE Kopien in den Papierkorb."""
+    moved = 0
+    if not os.path.isdir(dest):
+        return 0
+    for f in os.listdir(dest):
+        new = os.path.join(dest, f)
+        if not os.path.isfile(new):
+            continue
+        size = os.path.getsize(new)
+        for old in list(idx.get((f.lower(), size), [])):
+            if not os.path.exists(old) or not same_content(new, old, size):
+                continue
+            rel = os.path.relpath(old, WD_ROOT)
+            target = os.path.join(TRASH_ROOT, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if os.path.exists(target):
+                target += f".{int(time.time())}"
+            os.rename(old, target)  # nur verschieben, nicht löschen
+            idx[(f.lower(), size)].remove(old)
+            moved += 1
+            parent = os.path.dirname(old)
+            while parent != WD_ROOT and os.path.isdir(parent) and not os.listdir(parent):
+                os.rmdir(parent)  # leer gewordene alte Ordner aufräumen
+                parent = os.path.dirname(parent)
+    return moved
+
+
 def download_albums():
-    albums = STATE.get("albums") or []
-    os.makedirs(ALBUM_ROOT, exist_ok=True)
-    log("Lese vorhandene Fotos für den Doppelt-Check ein …")
-    idx = index_existing()
-    log(f"{len(idx)} vorhandene Fotos außerhalb von Alben/.")
+    if not authenticate():
+        return
+    albums = list_albums()
+    if not albums:
+        log("Keine Alben erhalten – später erneut.")
+        return
+    with LOCK:
+        STATE["albums"] = albums
+    os.makedirs(ICLOUD_ROOT, exist_ok=True)
+    log("Lese alte Fotos ein …")
+    idx = index_old()
+    log(f"{sum(len(v) for v in idx.values())} alte Fotos gefunden.")
+    done = STATE.setdefault("done2", {})
     week = 7 * 24 * 3600
-    for album in albums:
+    total = len(albums)
+    for n, album in enumerate(albums, 1):
         if not in_window():
             return
-        sug = STATE["suggestions"].get(album)
-        if sug and sug["status"] == "pending":
-            log(f"„{album}“ übersprungen – wartet auf deine Bestätigung.")
+        t = done.get(album)
+        if t and time.time() - datetime.fromisoformat(t).timestamp() < week:
             continue
-        done = STATE["done"].get(album)
-        if done and time.time() - datetime.fromisoformat(done).timestamp() < week:
-            continue  # vollständig gesichert, erst nach einer Woche erneut prüfen
         if free_gb() < OPT["min_free_gb"]:
-            notify(f"Auf der WD sind nur noch {free_gb():.0f} GB frei. "
-                   "Das Backup pausiert, bis wieder Platz ist.", key="space")
-            log("Zu wenig Speicher – Backup pausiert.")
+            notify(f"Nur noch {free_gb():.0f} GB frei auf der WD. Bitte im Ordner "
+                   "Fotos/_Papierkorb nachsehen und leeren – das Backup pausiert.",
+                   title="Foto-Backup: Speicher knapp", key="space", every_h=6)
+            log("Zu wenig Speicher – pausiert.")
+            STATE["run_now"] = False
+            save_state()
             return
-        dest = os.path.join(ALBUM_ROOT, safe_name(album))
-        log(f"Album „{album}“ wird abgeglichen …")
-        # icloudpd lädt nur fehlende Dateien, überschreibt nie und löscht nichts
+        dest = os.path.join(ICLOUD_ROOT, safe_name(album))
+        log(f"[{n}/{total}] „{album}“ …")
+        STATE["progress"] = f"{n}/{total} – {album}"
         code, _ = run_icloudpd(
             ["--album", album, "-d", dest, "--folder-structure", "none"],
             stop_at_window_end=True)
-        dup = remove_new_duplicates(dest, idx)
-        if dup:
-            log(f"  {dup} Fotos gibt es schon in alten Ordnern – nicht doppelt gespeichert.")
-        if os.path.isdir(dest) and not os.listdir(dest):
-            os.rmdir(dest)  # leerer, eben angelegter Ordner
-        if code == 0:
-            with LOCK:
-                STATE["done"][album] = datetime.now().isoformat(timespec="minutes")
-                save_state()
-        else:
+        moved = trash_old_copies(dest, idx)
+        if moved:
+            log(f"  {moved} alte Kopien in den Papierkorb verschoben.")
+        with LOCK:
+            if code == 0:
+                done[album] = datetime.now().isoformat(timespec="minutes")
             save_state()
+    if STATE.get("run_now"):
+        STATE["run_now"] = False
+        notify("Alle iCloud-Alben sind gesichert. Bitte Fotos/_Papierkorb kurz prüfen "
+               "und dann leeren.", title="Foto-Backup fertig", key="finished", every_h=1)
+    STATE["progress"] = "fertig"
+    save_state()
 
 
 def nightly_job():
-    log("Nächtliches Backup startet.")
+    log("Backup startet.")
     STATE["last_error"] = None
     if not os.path.ismount(MOUNT) or not os.path.isdir(WD_ROOT):
         STATE["last_error"] = "WD-Freigabe nicht eingebunden"
         save_state()
         notify("Die WD-Freigabe ist nicht eingebunden – Backup nicht möglich.", key="mount")
         return
-    check_albums()
-    if in_window():
-        download_albums()
+    download_albums()
     STATE["last_run"] = datetime.now().isoformat(timespec="minutes")
     save_state()
     log("Durchlauf beendet.")
+
+
+RUN_LOCK = threading.Lock()
+
+
+def locked_job():
+    if not RUN_LOCK.acquire(blocking=False):
+        return
+    try:
+        nightly_job()
+    except Exception as ex:  # noqa: BLE001
+        log(f"Fehler: {ex}")
+        notify(f"Fehler im Foto-Backup: {ex}", key="error")
+    finally:
+        RUN_LOCK.release()
 
 
 def scheduler():
@@ -506,9 +582,10 @@ def scheduler():
             # "Nacht" = Datum des Fensterbeginns
             night = now.date() if now.hour >= OPT["start_hour"] else \
                 datetime.fromordinal(now.toordinal() - 1).date()
-            if in_window(now) and last_night != night:
+            if (in_window(now) and last_night != night) or \
+                    (STATE.get("run_now") and not RUN_LOCK.locked()):
                 last_night = night
-                nightly_job()
+                locked_job()
         except Exception as ex:  # noqa: BLE001
             log(f"Fehler: {ex}")
             STATE["last_error"] = str(ex)
@@ -572,8 +649,15 @@ def decide():
 
 @app.route("/check", methods=["POST"])
 def check_now():
-    if not busy():
-        threading.Thread(target=check_albums, daemon=True).start()
+    return start_now()
+
+
+@app.route("/start_now", methods=["POST"])
+def start_now():
+    if not busy() and not RUN_LOCK.locked():
+        STATE["run_now"] = True
+        save_state()
+        threading.Thread(target=locked_job, daemon=True).start()
     return redirect("./")
 
 

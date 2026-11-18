@@ -51,49 +51,19 @@
       <div><div class="k">Zeitfenster</div><div class="v">{{ window }}</div></div>
       <div><div class="k">Frei auf der WD</div><div class="v">{{ free }}</div></div>
       <div><div class="k">Letzter Durchlauf</div><div class="v">{{ state.last_run or "noch keiner" }}</div></div>
+      <div><div class="k">Fortschritt</div><div class="v">{{ state.progress or "–" }}</div></div>
     </div>
     {% if state.last_error %}<p class="err">⚠️ {{ state.last_error }}</p>{% endif %}
-    <p class="k">Regel: Es wird nie etwas gelöscht oder überschrieben – nur hinzugefügt.</p>
+    <p class="k">Alben landen in Fotos/iCloud/. Identische alte Kopien wandern in Fotos/_Papierkorb – endgültig gelöscht wird nichts.</p>
     <form method="post" action="check">
-      <button type="submit" {% if busy %}disabled{% endif %}>Alben jetzt prüfen</button>
+      <button type="submit" {% if busy %}disabled{% endif %}>Jetzt sofort komplett sichern</button>
     </form>
   </div>
 
-  {% set sugs = state.suggestions %}
   <div class="card">
-    <h2>Umbenennen: alte Ordner → iCloud-Alben</h2>
-    {% if not sugs %}
-      <p class="k">Noch keine Vorschläge. Tippe auf „Alben jetzt prüfen“ oder warte auf die nächste Nacht.</p>
-    {% else %}
-    <table>
-      <tr><th>Alter Ordner</th><th>iCloud-Album</th><th>Treffer</th><th></th></tr>
-      {% for album, s in sugs.items() %}
-      <tr>
-        <td>{{ s.folder }}</td>
-        <td><b>{{ album }}</b></td>
-        <td>{{ s.percent }} % ({{ s.hits }}/{{ s.total }})</td>
-        <td>
-          {% if s.status == "pending" %}
-          <form class="inline" method="post" action="decide">
-            <input type="hidden" name="album" value="{{ album }}">
-            <button class="ok" name="action" value="accept">Umbenennen</button>
-            <button name="action" value="reject">Nein</button>
-          </form>
-          {% elif s.status == "accepted" %}<span class="tag">✓ umbenannt</span>
-          {% elif s.status == "rejected" %}<span class="tag">abgelehnt</span>
-          {% else %}<span class="tag">Ziel existiert schon</span>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    <p class="k">Beim Umbenennen wird nur der Ordner verschoben nach „Alben/…“. Fehlende Fotos lädt das Backup danach nach.</p>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <h2>Gesicherte Alben ({{ state.done|length }})</h2>
-    {% if state.done %}
-      <p>{% for a, t in state.done.items() %}<span class="tag">{{ a }}</span> {% endfor %}</p>
+    <h2>Gesicherte Alben ({{ (state.done2 or {})|length }})</h2>
+    {% if state.done2 %}
+      <p>{% for a, t in state.done2.items() %}<span class="tag">{{ a }}</span> {% endfor %}</p>
     {% else %}<p class="k">Noch keine.</p>{% endif %}
   </div>
 
