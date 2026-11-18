@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foto-Backup</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c1e21; --muted:#6b7280; --line:#e5e7eb; --accent:#03a9f4; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1c2026; --text:#e6e8eb; --muted:#9aa3ad; --line:#2c323a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:860px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:4px 0 16px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
+  .k { color:var(--muted); font-size:13px; } .v { font-weight:600; }
+  .alert { border-left:4px solid var(--warn); }
+  .err { color:var(--bad); }
+  input[type=text] { font-size:22px; letter-spacing:4px; width:10em; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--text); }
+  button { font:inherit; padding:7px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.ok { background:var(--ok); border-color:var(--ok); color:#fff; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; font-size:13px; }
+  .tag { font-size:12px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); }
+  pre { background:var(--bg); padding:10px; border-radius:8px; max-height:340px; overflow:auto; font-size:12px; white-space:pre-wrap; margin:0; }
+  form.inline { display:inline; }
+  @media (max-width:560px){ td:nth-child(3), th:nth-child(3){ display:none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>📷 Foto-Backup</h1>
+
+  {% if state.needs_code %}
+  <div class="card alert">
+    <h2>Zwei-Faktor-Code eingeben</h2>
+    <p>Apple hat einen Code an dein iPhone geschickt. Gib ihn hier ein:</p>
+    <form method="post" action="code">
+      <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus>
+      <button class="primary" type="submit">Senden</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="grid">
+      <div><div class="k">Status</div><div class="v">{{ "läuft gerade" if busy else "wartet" }}</div></div>
+      <div><div class="k">Zeitfenster</div><div class="v">{{ window }}</div></div>
+      <div><div class="k">Frei auf der WD</div><div class="v">{{ free }}</div></div>
+      <div><div class="k">Letzter Durchlauf</div><div class="v">{{ state.last_run or "noch keiner" }}</div></div>
+    </div>
+    {% if state.last_error %}<p class="err">⚠️ {{ state.last_error }}</p>{% endif %}
+    <p class="k">Regel: Es wird nie etwas gelöscht oder überschrieben – nur hinzugefügt.</p>
+    <form method="post" action="check">
+      <button type="submit" {% if busy %}disabled{% endif %}>Alben jetzt prüfen</button>
+    </form>
+  </div>
+
+  {% set sugs = state.suggestions %}
+  <div class="card">
+    <h2>Umbenennen: alte Ordner → iCloud-Alben</h2>
+    {% if not sugs %}
+      <p class="k">Noch keine Vorschläge. Tippe auf „Alben jetzt prüfen“ oder warte auf die nächste Nacht.</p>
+    {% else %}
+    <table>
+      <tr><th>Alter Ordner</th><th>iCloud-Album</th><th>Treffer</th><th></th></tr>
+      {% for album, s in sugs.items() %}
+      <tr>
+        <td>{{ s.folder }}</td>
+        <td><b>{{ album }}</b></td>
+        <td>{{ s.percent }} % ({{ s.hits }}/{{ s.total }})</td>
+        <td>
+          {% if s.status == "pending" %}
+          <form class="inline" method="post" action="decide">
+            <input type="hidden" name="album" value="{{ album }}">
+            <button class="ok" name="action" value="accept">Umbenennen</button>
+            <button name="action" value="reject">Nein</button>
+          </form>
+          {% elif s.status == "accepted" %}<span class="tag">✓ umbenannt</span>
+          {% elif s.status == "rejected" %}<span class="tag">abgelehnt</span>
+          {% else %}<span class="tag">Ziel existiert schon</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="k">Beim Umbenennen wird nur der Ordner verschoben nach „Alben/…“. Fehlende Fotos lädt das Backup danach nach.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Gesicherte Alben ({{ state.done|length }})</h2>
+    {% if state.done %}
+      <p>{% for a, t in state.done.items() %}<span class="tag">{{ a }}</span> {% endfor %}</p>
+    {% else %}<p class="k">Noch keine.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Protokoll</h2>
+    <pre>{% for l in log|reverse %}{{ l }}
+{% endfor %}</pre>
+  </div>
+</main>
+</body>
+</html>

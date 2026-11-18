@@ -1,0 +1,433 @@
+"""iCloud Foto-Backup für Home Assistant.
+
+Grundregel: Es wird NIE eine Datei gelöscht oder überschrieben. Die App lädt
+nur hinzu. Ordner werden nur nach Bestätigung im Web-Interface umbenannt.
+"""
+
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import threading
+import time
+from datetime import datetime
+
+import requests
+import waitress
+from flask import Flask, jsonify, redirect, render_template, request
+
+OPTIONS_FILE = "/data/options.json"
+STATE_FILE = "/data/state.json"
+COOKIE_DIR = "/data/cookies"
+WD_ROOT = "/mnt/wd"
+ALBUM_ROOT = os.path.join(WD_ROOT, "Alben")
+
+# Intelligente Alben von Apple -> keine eigenen Ordner
+SMART_ALBUMS = {
+    "all photos", "alle fotos", "time-lapse", "videos", "slo-mo", "bursts",
+    "favorites", "panoramas", "screenshots", "live", "hidden",
+    "recently deleted", "selfies", "portrait", "raw", "long exposure",
+    "animated", "unknown", "library",
+}
+PHOTO_EXT = {
+    ".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif", ".mov", ".mp4",
+    ".m4v", ".dng", ".tif", ".tiff", ".webp", ".avi", ".3gp",
+}
+
+OPT = json.load(open(OPTIONS_FILE))
+LOCK = threading.RLock()
+CODE_EVENT = threading.Event()
+CODE_VALUE = {"code": None}
+CURRENT = {"proc": None}
+LOG = []
+
+
+# ------------------------------------------------------------------ helpers
+def log(msg):
+    line = f"{datetime.now():%d.%m. %H:%M:%S}  {msg}"
+    print(line, flush=True)
+    with LOCK:
+        LOG.append(line)
+        del LOG[:-300]
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"suggestions": {}, "done": {}, "last_run": None,
+                "last_error": None, "needs_code": False, "notified": {}}
+
+
+STATE = load_state()
+
+
+def save_state():
+    with LOCK:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(STATE, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, STATE_FILE)
+
+
+def notify(message, title="Foto-Backup", key=None, every_h=20):
+    """Push an alle eingestellten notify-Dienste (mit Sperrfrist pro key)."""
+    if key:
+        last = STATE["notified"].get(key, 0)
+        if time.time() - last < every_h * 3600:
+            return
+        STATE["notified"][key] = time.time()
+        save_state()
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    for svc in OPT.get("notify_services", []):
+        try:
+            requests.post(
+                f"http://supervisor/core/api/services/notify/{svc}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"title": title, "message": message},
+                timeout=10,
+            )
+        except Exception as ex:  # noqa: BLE001
+            log(f"Push an {svc} fehlgeschlagen: {ex}")
+
+
+def in_window(now=None):
+    h = (now or datetime.now()).hour
+    s, e = OPT["start_hour"], OPT["end_hour"]
+    return (s <= h < e) if s < e else (h >= s or h < e)
+
+
+def free_gb():
+    return shutil.disk_usage(WD_ROOT).free / 1024 ** 3
+
+
+def safe_name(name):
+    name = re.sub(r'[\\/:*?"<>|]', "_", name).strip().strip(".")
+    return name or "Unbenannt"
+
+
+def stem(filename):
+    return os.path.splitext(os.path.basename(filename))[0].lower()
+
+
+def base_args():
+    return [
+        "icloudpd",
+        "--username", OPT["apple_id"],
+        "--password", OPT["apple_password"],
+        "--password-provider", "parameter",
+        "--mfa-provider", "console",
+        "--cookie-directory", COOKIE_DIR,
+        "--no-progress-bar",
+    ]
+
+
+def run_icloudpd(extra, collect=False, stop_at_window_end=False):
+    """Startet icloudpd. Beantwortet eine 2FA-Abfrage über das Web-Interface.
+
+    Gibt (exitcode, ausgabezeilen) zurück.
+    """
+    os.makedirs(COOKIE_DIR, exist_ok=True)
+    proc = subprocess.Popen(
+        base_args() + extra,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        bufsize=0, start_new_session=True,
+    )
+    CURRENT["proc"] = proc
+    lines, buf = [], b""
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                chunk = None
+            if chunk:
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    text = raw.decode("utf-8", "replace").rstrip("\r")
+                    if collect:
+                        lines.append(text)
+                    if text.strip() and not collect:
+                        log(text.replace(OPT["apple_password"], "***"))
+                pending = buf.decode("utf-8", "replace")
+                if "authentication code" in pending and pending.rstrip().endswith(":"):
+                    buf = b""
+                    answer_mfa(proc)
+            elif chunk == b"" or proc.poll() is not None:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+            else:
+                if stop_at_window_end and not in_window():
+                    log("Zeitfenster vorbei – Download pausiert bis zur nächsten Nacht.")
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    proc.wait(timeout=60)
+                    break
+                time.sleep(0.3)
+        if buf and collect:
+            lines.append(buf.decode("utf-8", "replace"))
+        return proc.wait(), lines
+    finally:
+        CURRENT["proc"] = None
+
+
+def answer_mfa(proc):
+    log("Apple verlangt einen Zwei-Faktor-Code. Bitte im Foto-Backup eingeben.")
+    with LOCK:
+        STATE["needs_code"] = True
+        save_state()
+    notify("Apple verlangt einen neuen Zwei-Faktor-Code. Öffne in Home Assistant "
+           "die Seite „Foto-Backup“ und gib den Code von deinem iPhone ein.",
+           title="Foto-Backup: Code nötig", key="mfa", every_h=6)
+    CODE_EVENT.clear()
+    # bis zu 8 Stunden auf den Code warten
+    if CODE_EVENT.wait(timeout=8 * 3600) and CODE_VALUE["code"]:
+        proc.stdin.write((CODE_VALUE["code"] + "\n").encode())
+        proc.stdin.flush()
+        CODE_VALUE["code"] = None
+        log("Code übermittelt.")
+    else:
+        log("Kein Code erhalten – Abbruch.")
+        os.killpg(proc.pid, signal.SIGTERM)
+    with LOCK:
+        STATE["needs_code"] = False
+        save_state()
+
+
+# ------------------------------------------------------------------ iCloud
+def authenticate():
+    code, _ = run_icloudpd(["--auth-only"])
+    if code != 0:
+        STATE["last_error"] = "Anmeldung bei iCloud fehlgeschlagen"
+        save_state()
+        notify("Anmeldung bei iCloud fehlgeschlagen. Apple-ID/Passwort prüfen "
+               "oder neuen Code eingeben.", key="authfail")
+        return False
+    return True
+
+
+def list_albums():
+    code, lines = run_icloudpd(["--list-albums"], collect=True)
+    if code != 0:
+        return []
+    out, started = [], False
+    for line in lines:
+        if line.strip() == "Albums:":
+            started = True
+            continue
+        if started and line.strip():
+            out.append(line.strip())
+    excl = {a.lower() for a in OPT.get("exclude_albums", [])}
+    return [a for a in out if a.lower() not in SMART_ALBUMS and a.lower() not in excl]
+
+
+def album_filenames(album):
+    tmp = "/tmp/empty-listing"
+    os.makedirs(tmp, exist_ok=True)
+    code, lines = run_icloudpd(
+        ["--album", album, "-d", tmp, "--folder-structure", "none",
+         "--only-print-filenames"], collect=True)
+    if code != 0:
+        return None
+    return {stem(l) for l in lines if l.startswith(tmp)}
+
+
+def index_old_folders():
+    """Alle vorhandenen Ordner auf der WD (außer Alben/) mit Dateinamen."""
+    result = {}
+    for root, dirs, files in os.walk(WD_ROOT):
+        rel = os.path.relpath(root, WD_ROOT)
+        if rel == "." :
+            dirs[:] = [d for d in dirs if d != "Alben" and not d.startswith(".")]
+            continue
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        stems = {stem(f) for f in files if os.path.splitext(f)[1].lower() in PHOTO_EXT}
+        if stems:
+            result[rel] = stems
+    return result
+
+
+def check_albums():
+    """Vergleicht iCloud-Alben mit vorhandenen Ordnern und erstellt Vorschläge."""
+    if not authenticate():
+        return
+    albums = list_albums()
+    log(f"{len(albums)} Alben in iCloud gefunden.")
+    old = index_old_folders()
+    log(f"{len(old)} vorhandene Ordner auf der WD eingelesen.")
+    thr = OPT["match_threshold"] / 100
+    with LOCK:
+        STATE["albums"] = albums
+    checked = set(STATE.setdefault("checked", []))
+    for album in albums:
+        if album in STATE["suggestions"] or album in checked:
+            continue
+        names = album_filenames(album)
+        if names is None:
+            continue
+        with LOCK:
+            STATE["checked"].append(album)
+        if not names:
+            continue
+        best, best_hits = None, 0
+        for folder, stems in old.items():
+            hits = len(names & stems)
+            if hits > best_hits:
+                best, best_hits = folder, hits
+        pct = best_hits / len(names)
+        if best and pct >= thr and safe_name(album) != os.path.basename(best):
+            with LOCK:
+                STATE["suggestions"][album] = {
+                    "folder": best, "hits": best_hits, "total": len(names),
+                    "percent": round(pct * 100), "status": "pending"}
+                save_state()
+            log(f"Vorschlag: „{best}“ → „{album}“ ({round(pct*100)} %)")
+    pending = sum(1 for s in STATE["suggestions"].values() if s["status"] == "pending")
+    if pending:
+        notify(f"{pending} alte Ordner passen zu iCloud-Alben. Bitte in Home Assistant "
+               "unter „Foto-Backup“ prüfen und bestätigen.", key="suggest", every_h=48)
+    STATE["last_check"] = datetime.now().isoformat(timespec="minutes")
+    save_state()
+
+
+def download_albums():
+    albums = STATE.get("albums") or []
+    os.makedirs(ALBUM_ROOT, exist_ok=True)
+    for album in albums:
+        if not in_window():
+            return
+        sug = STATE["suggestions"].get(album)
+        if sug and sug["status"] == "pending":
+            log(f"„{album}“ übersprungen – wartet auf deine Bestätigung.")
+            continue
+        if free_gb() < OPT["min_free_gb"]:
+            notify(f"Auf der WD sind nur noch {free_gb():.0f} GB frei. "
+                   "Das Backup pausiert, bis wieder Platz ist.", key="space")
+            log("Zu wenig Speicher – Backup pausiert.")
+            return
+        dest = os.path.join(ALBUM_ROOT, safe_name(album))
+        log(f"Album „{album}“ wird abgeglichen …")
+        # icloudpd lädt nur fehlende Dateien, überschreibt nie und löscht nichts
+        code, _ = run_icloudpd(
+            ["--album", album, "-d", dest, "--folder-structure", "none"],
+            stop_at_window_end=True)
+        if code == 0:
+            with LOCK:
+                STATE["done"][album] = datetime.now().isoformat(timespec="minutes")
+                save_state()
+
+
+def nightly_job():
+    log("Nächtliches Backup startet.")
+    STATE["last_error"] = None
+    if not os.path.ismount(WD_ROOT):
+        STATE["last_error"] = "WD-Freigabe nicht eingebunden"
+        save_state()
+        notify("Die WD-Freigabe ist nicht eingebunden – Backup nicht möglich.", key="mount")
+        return
+    check_albums()
+    if in_window():
+        download_albums()
+    STATE["last_run"] = datetime.now().isoformat(timespec="minutes")
+    save_state()
+    log("Durchlauf beendet.")
+
+
+def scheduler():
+    last_night = None
+    while True:
+        try:
+            now = datetime.now()
+            # "Nacht" = Datum des Fensterbeginns
+            night = now.date() if now.hour >= OPT["start_hour"] else \
+                datetime.fromordinal(now.toordinal() - 1).date()
+            if in_window(now) and last_night != night:
+                last_night = night
+                nightly_job()
+        except Exception as ex:  # noqa: BLE001
+            log(f"Fehler: {ex}")
+            STATE["last_error"] = str(ex)
+            save_state()
+            notify(f"Fehler im Foto-Backup: {ex}", key="error")
+        time.sleep(60)
+
+
+# ------------------------------------------------------------------ Web-UI
+app = Flask(__name__)
+
+
+def busy():
+    return CURRENT["proc"] is not None
+
+
+@app.route("/")
+def index():
+    try:
+        free = f"{free_gb():.0f} GB" if os.path.ismount(WD_ROOT) else "nicht eingebunden"
+    except Exception:  # noqa: BLE001
+        free = "?"
+    with LOCK:
+        return render_template(
+            "index.html", state=STATE, log=LOG[-80:], free=free,
+            busy=busy(), window=f"{OPT['start_hour']}–{OPT['end_hour']} Uhr")
+
+
+@app.route("/code", methods=["POST"])
+def code():
+    CODE_VALUE["code"] = re.sub(r"\D", "", request.form.get("code", ""))
+    CODE_EVENT.set()
+    return redirect("./")
+
+
+@app.route("/decide", methods=["POST"])
+def decide():
+    album = request.form["album"]
+    action = request.form["action"]
+    with LOCK:
+        sug = STATE["suggestions"].get(album)
+        if not sug or sug["status"] != "pending":
+            return redirect("./")
+        if action == "accept":
+            src = os.path.join(WD_ROOT, sug["folder"])
+            dst = os.path.join(ALBUM_ROOT, safe_name(album))
+            os.makedirs(ALBUM_ROOT, exist_ok=True)
+            if os.path.exists(dst):
+                sug["status"] = "conflict"
+                log(f"„{dst}“ existiert schon – nichts umbenannt.")
+            else:
+                os.rename(src, dst)  # nur verschieben/umbenennen, nichts löschen
+                sug["status"] = "accepted"
+                log(f"Umbenannt: „{sug['folder']}“ → „Alben/{safe_name(album)}“")
+        else:
+            sug["status"] = "rejected"
+            log(f"Vorschlag für „{album}“ abgelehnt – Album wird neu geladen.")
+        save_state()
+    return redirect("./")
+
+
+@app.route("/check", methods=["POST"])
+def check_now():
+    if not busy():
+        threading.Thread(target=check_albums, daemon=True).start()
+    return redirect("./")
+
+
+@app.route("/api/status")
+def api_status():
+    return jsonify({k: STATE.get(k) for k in ("last_run", "last_error", "needs_code")})
+
+
+if __name__ == "__main__":
+    log("Foto-Backup gestartet. Zeitfenster: "
+        f"{OPT['start_hour']}–{OPT['end_hour']} Uhr. Es wird nie etwas gelöscht.")
+    if os.environ.get("WD_MOUNTED") != "1":
+        notify("Die WD-Freigabe konnte nicht eingebunden werden. Bitte "
+               "Freigabe, Benutzer und Passwort in der App prüfen.", key="mount")
+    threading.Thread(target=scheduler, daemon=True).start()
+    waitress.serve(app, host="0.0.0.0", port=8099)
