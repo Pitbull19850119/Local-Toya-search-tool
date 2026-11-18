@@ -215,7 +215,10 @@ def authenticate():
 
 def list_albums():
     code, lines = run_icloudpd(["--list-albums"], collect=True)
-    if code != 0:
+    if code != 0 or not any(l.strip() == "Albums:" for l in lines):
+        log(f"Albenliste fehlgeschlagen (Exit {code}). Ausgabe:")
+        for l in lines[-25:]:
+            log("  " + l.replace(OPT["apple_password"], "***"))
         return []
     out, started = [], False
     for line in lines:
