@@ -217,8 +217,11 @@ def list_albums():
     code, lines = run_icloudpd(["--list-albums"], collect=True)
     if code != 0 or not any(l.strip() == "Albums:" for l in lines):
         log(f"Albenliste fehlgeschlagen (Exit {code}). Ausgabe:")
-        for l in lines[-25:]:
-            log("  " + l.replace(OPT["apple_password"], "***"))
+        keys = ("error", "exception", "denied", "not activated", "adp",
+                "web access", "please", "failed", "traceback")
+        hits = [l for l in lines if any(k in l.lower() for k in keys)]
+        for l in (hits[-15:] or lines[:15]):
+            log("  " + l.replace(OPT["apple_password"], "***")[:400])
         return []
     out, started = [], False
     for line in lines:
