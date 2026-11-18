@@ -28,7 +28,8 @@ pre{background:var(--bg);padding:8px;border-radius:8px;font-size:12px;max-height
   {% if s.counts %}
   <div class="grid" style="margin-top:10px">
     <div><div class="k">Dateien A / B</div><div class="v">{{ s.counts.a }} / {{ s.counts.b }}</div></div>
-    <div><div class="k">Doppelt</div><div class="v">{{ s.counts.dup }}</div></div>
+    <div><div class="k">Doppelt A↔B</div><div class="v">{{ s.counts.dup }}</div></div>
+    <div><div class="k">Doppelt innerhalb</div><div class="v">{{ s.counts.intern }}</div></div>
     <div><div class="k">Doppelt belegt</div><div class="v">{{ s.counts.dup_size }}</div></div>
     <div><div class="k">Stand</div><div class="v">{{ s.scanned }}</div></div>
   </div>{% endif %}
@@ -58,6 +59,28 @@ pre{background:var(--bg);padding:8px;border-radius:8px;font-size:12px;max-height
   {% endif %}
 </div>
 {% endfor %}</form>{% elif s.scanned %}<div class="card">Keine doppelten Dateien gefunden. 🎉</div>{% endif %}
+
+<h2 id="intern" style="font-size:18px;margin:22px 0 10px">Doppelt innerhalb einer Festplatte</h2>
+{% if s.internal %}<form method="post" action="bulk_files">
+<div class="card bar">
+  <div class="row" style="margin-top:0">
+    <button type="button" onclick="markCopies()">Alle Kopien außer der ersten auswählen</button>
+    <button type="button" onclick="setF(false)">Alle abwählen</button>
+    <span class="k" id="cntf" style="align-self:center">0 ausgewählt</span>
+  </div>
+  <div class="row"><button class="ba" onclick="return goF()">Ausgewählte Kopien entfernen</button></div>
+  <p class="k">Pro Film bleibt immer mindestens eine Kopie erhalten.</p>
+</div>
+{% for g in s.internal %}
+<div class="card">
+  <div><b>{{ g.name }}</b> <span class="k">· {{ g.size_h }} · {{ g.paths|length }}× in {{ g.side|upper }}</span></div>
+  {% for p in g.paths %}{% set key = g.side ~ "|" ~ p %}
+  <div class="path {{ 'pa' if g.side=='a' else 'pb' }}">
+    {% if key in s.removed %}<span class="tag">✓ entfernt</span> <s>{{ p }}</s>
+    {% else %}<label><input type="checkbox" class="fsel {{ 'copy' if not loop.first }}" name="f" value="{{ key }}" onchange="countF()">{{ p }}</label>{% endif %}
+  </div>{% endfor %}
+</div>{% endfor %}
+</form>{% elif s.scanned %}<div class="card">Keine Duplikate innerhalb einer Festplatte. 🎉</div>{% endif %}
 <div class="card"><div class="k">Protokoll</div><pre>{% for l in s.log|reverse %}{{ l }}
 {% endfor %}</pre></div>
 </main>
@@ -67,4 +90,9 @@ function count(){var n=0;boxes().forEach(function(b){if(b.checked)n++;});documen
 function setAll(v){boxes().forEach(function(b){b.checked=v;});count();}
 function go(side){var n=count();if(!n){alert('Nichts ausgewählt');return false;}
 return confirm(n+' Einträge aus Ordner '+side+' in den Papierkorb verschieben?');}
+function fb(){return document.querySelectorAll('input.fsel');}
+function countF(){var n=0;fb().forEach(function(b){if(b.checked)n++;});document.getElementById('cntf').textContent=n+' ausgewählt';return n;}
+function setF(v){fb().forEach(function(b){b.checked=v;});countF();}
+function markCopies(){fb().forEach(function(b){b.checked=b.classList.contains('copy');});countF();}
+function goF(){var n=countF();if(!n){alert('Nichts ausgewählt');return false;}return confirm(n+' Kopien in den Papierkorb verschieben?');}
 </script></body></html>

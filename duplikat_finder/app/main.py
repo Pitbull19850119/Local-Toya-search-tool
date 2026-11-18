@@ -29,7 +29,7 @@ ROOT = {
 for r in ROOT.values():
     r["path"] = os.path.join(r["mnt"], r["sub"]) if r["sub"] else r["mnt"]
 
-STATE = {"groups": [], "scanning": False, "scanned": None, "log": [],
+STATE = {"internal": [], "removed": set(), "bulk": None, "groups": [], "scanning": False, "scanned": None, "log": [],
          "counts": {}, "decided": {}}
 LOCK = threading.Lock()
 
@@ -86,9 +86,19 @@ def scan():
                 "id": f"{name}|{size}", "name": os.path.basename(fa[key][0]),
                 "size": size, "size_h": human(size), "a": fa[key], "b": fb[key]})
         STATE["groups"] = groups
+        internal = []
+        for side, files in (("a", fa), ("b", fb)):
+            for (name, size), paths in sorted(files.items()):
+                if len(paths) > 1:
+                    internal.append({"side": side, "name": os.path.basename(paths[0]),
+                                     "size_h": human(size), "size": size,
+                                     "paths": sorted(paths)})
+        STATE["internal"] = internal
+        STATE["removed"] = set()
         STATE["counts"] = {"a": sum(len(v) for v in fa.values()),
                            "b": sum(len(v) for v in fb.values()),
                            "dup": len(groups),
+                           "intern": len(internal),
                            "dup_size": human(sum(g["size"] for g in groups))}
         STATE["scanned"] = datetime.now().strftime("%d.%m. %H:%M")
         log(f"Fertig: {len(groups)} doppelte Dateien gefunden.")
@@ -150,6 +160,40 @@ def bulk():
     elif side == "keep":
         for gid in ids:
             STATE["decided"].setdefault(gid, "beide behalten")
+    return redirect("./")
+
+
+def files_worker(items):
+    STATE["bulk"] = {"total": len(items), "done": 0, "side": "A/B"}
+    for side, rel in items:
+        try:
+            to_trash(side, rel)
+            STATE["removed"].add(f"{side}|{rel}")
+        except Exception as ex:  # noqa: BLE001
+            log(f"Fehler bei {rel}: {ex}")
+        STATE["bulk"]["done"] += 1
+    log(f"{len(items)} doppelte Kopien in den Papierkorb verschoben.")
+    STATE["bulk"] = None
+
+
+@app.route("/bulk_files", methods=["POST"])
+def bulk_files():
+    items = []
+    for v in request.form.getlist("f"):
+        side, rel = v.split("|", 1)
+        if side in ("a", "b") and v not in STATE.get("removed", set()):
+            items.append((side, rel))
+    # Sicherheit: pro Gruppe muss mindestens eine Kopie bleiben
+    chosen = {f"{a}|{b}" for a, b in items}
+    for g in STATE.get("internal", []):
+        keys = [f"{g['side']}|{p}" for p in g["paths"]]
+        left = [k for k in keys if k not in chosen and k not in STATE["removed"]]
+        if not left:
+            keep = keys[0]
+            items = [i for i in items if f"{i[0]}|{i[1]}" != keep]
+            log(f"„{g['name']}“: letzte Kopie wird behalten.")
+    if items and not STATE.get("bulk"):
+        threading.Thread(target=files_worker, args=(items,), daemon=True).start()
     return redirect("./")
 
 
