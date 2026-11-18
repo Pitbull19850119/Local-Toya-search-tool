@@ -1,5 +1,5 @@
 name: "iCloud Foto-Backup"
-version: "0.1.0"
+version: "0.1.1"
 slug: "icloud_foto_backup"
 description: "Sichert iCloud-Alben nachts auf die WD My Cloud – löscht nie etwas, fügt nur hinzu"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
@@ -21,7 +21,8 @@ privileged:
 options:
   apple_id: ""
   apple_password: ""
-  wd_share: "//192.168.0.X/Foto-Backup"
+  wd_share: "//192.168.0.X/Public"
+  base_folder: "Fotos"
   wd_user: ""
   wd_password: ""
   start_hour: 23
@@ -35,6 +36,7 @@ schema:
   apple_id: email
   apple_password: password
   wd_share: str
+  base_folder: str
   wd_user: str
   wd_password: password
   start_hour: "int(0,23)"

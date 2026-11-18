@@ -21,7 +21,9 @@ from flask import Flask, jsonify, redirect, render_template, request
 OPTIONS_FILE = "/data/options.json"
 STATE_FILE = "/data/state.json"
 COOKIE_DIR = "/data/cookies"
-WD_ROOT = "/mnt/wd"
+OPT = json.load(open(OPTIONS_FILE))
+MOUNT = "/mnt/wd"
+WD_ROOT = os.path.join(MOUNT, OPT.get("base_folder", "").strip("/")).rstrip("/")
 ALBUM_ROOT = os.path.join(WD_ROOT, "Alben")
 
 # Intelligente Alben von Apple -> keine eigenen Ordner
@@ -36,7 +38,6 @@ PHOTO_EXT = {
     ".m4v", ".dng", ".tif", ".tiff", ".webp", ".avi", ".3gp",
 }
 
-OPT = json.load(open(OPTIONS_FILE))
 LOCK = threading.RLock()
 CODE_EVENT = threading.Event()
 CODE_VALUE = {"code": None}
@@ -101,7 +102,7 @@ def in_window(now=None):
 
 
 def free_gb():
-    return shutil.disk_usage(WD_ROOT).free / 1024 ** 3
+    return shutil.disk_usage(MOUNT).free / 1024 ** 3
 
 
 def safe_name(name):
@@ -326,7 +327,7 @@ def download_albums():
 def nightly_job():
     log("Nächtliches Backup startet.")
     STATE["last_error"] = None
-    if not os.path.ismount(WD_ROOT):
+    if not os.path.ismount(MOUNT) or not os.path.isdir(WD_ROOT):
         STATE["last_error"] = "WD-Freigabe nicht eingebunden"
         save_state()
         notify("Die WD-Freigabe ist nicht eingebunden – Backup nicht möglich.", key="mount")
@@ -369,7 +370,7 @@ def busy():
 @app.route("/")
 def index():
     try:
-        free = f"{free_gb():.0f} GB" if os.path.ismount(WD_ROOT) else "nicht eingebunden"
+        free = f"{free_gb():.0f} GB" if os.path.ismount(MOUNT) else "nicht eingebunden"
     except Exception:  # noqa: BLE001
         free = "?"
     with LOCK:
