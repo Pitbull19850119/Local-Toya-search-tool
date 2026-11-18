@@ -125,8 +125,22 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return render_template("index.html", s=STATE, root=ROOT,
+    sp = space()
+    sp = {k: v for k, v in sp.items() if isinstance(v, dict)}
+    return render_template("index.html", s=STATE, root=ROOT, space=sp,
                            mounted={k: os.path.isdir(r["path"]) for k, r in ROOT.items()})
+
+
+@app.route("/api/space")
+def space():
+    out = {}
+    for k, r in ROOT.items():
+        try:
+            u = __import__("shutil").disk_usage(r["mnt"])
+            out[k] = {"total": human(u.total), "used": human(u.used), "free": human(u.free)}
+        except Exception as ex:  # noqa: BLE001
+            out[k] = str(ex)
+    return out
 
 
 @app.route("/scan", methods=["POST"])

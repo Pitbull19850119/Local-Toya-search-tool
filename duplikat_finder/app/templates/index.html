@@ -22,8 +22,8 @@ pre{background:var(--bg);padding:8px;border-radius:8px;font-size:12px;max-height
 <h1>🎬 Duplikat-Finder</h1>
 <div class="card">
   <div class="grid">
-    <div><div class="k pa">Ordner A</div><div class="path">{{ root.a.name }}</div>{% if not mounted.a %}<b>nicht gefunden</b>{% endif %}</div>
-    <div><div class="k pb">Ordner B</div><div class="path">{{ root.b.name }}</div>{% if not mounted.b %}<b>nicht gefunden</b>{% endif %}</div>
+    <div><div class="k pa">Ordner A</div><div class="path">{{ root.a.name }}</div>{% if not mounted.a %}<b>nicht gefunden</b>{% endif %}{% if space.a %}<div class="k">frei: {{ space.a.free }} von {{ space.a.total }}</div>{% endif %}</div>
+    <div><div class="k pb">Ordner B</div><div class="path">{{ root.b.name }}</div>{% if not mounted.b %}<b>nicht gefunden</b>{% endif %}{% if space.b %}<div class="k">frei: {{ space.b.free }} von {{ space.b.total }}</div>{% endif %}</div>
   </div>
   {% if s.counts %}
   <div class="grid" style="margin-top:10px">
