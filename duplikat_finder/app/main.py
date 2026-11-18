@@ -143,6 +143,18 @@ def space():
     return out
 
 
+@app.route("/api/sizes")
+def sizes():
+    out = {}
+    for k in ROOT:
+        total, count = 0, 0
+        for (name, size), paths in walk(k).items():
+            total += size * len(paths)
+            count += len(paths)
+        out[k] = {"files": count, "size": human(total), "bytes": total}
+    return out
+
+
 @app.route("/scan", methods=["POST"])
 def do_scan():
     threading.Thread(target=scan, daemon=True).start()
