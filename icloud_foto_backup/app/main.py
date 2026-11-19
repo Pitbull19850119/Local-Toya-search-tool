@@ -537,6 +537,14 @@ def download_albums():
             if code == 0:
                 done[album] = datetime.now().isoformat(timespec="minutes")
             save_state()
+    # Fotos, die in keinem Album liegen
+    t = done.get("__ohne_album__")
+    if in_window() and not (t and time.time() - datetime.fromisoformat(t).timestamp() < week):
+        if run_ohne_album(idx):
+            done["__ohne_album__"] = datetime.now().isoformat(timespec="minutes")
+            save_state()
+        elif not in_window():
+            return
     if STATE.get("run_now"):
         STATE["run_now"] = False
         notify("Alle iCloud-Alben sind gesichert. Bitte Fotos/_Papierkorb kurz prüfen "
@@ -571,6 +579,33 @@ def remount():
     finally:
         os.remove(cred)
     return False
+
+
+def run_ohne_album(idx):
+    """Sichert Fotos ohne Album nach iCloud/_Ohne Album/<Jahr>/."""
+    dest = os.path.join(ICLOUD_ROOT, "_Ohne Album")
+    log("„Ohne Album“: Fotos, die in keinem Album liegen …")
+    STATE["progress"] = "Ohne Album"
+    args = ["python3", "-u", "/app/ohne_album.py", dest]
+    if not STATE.get("run_now"):
+        args += [str(OPT["end_hour"]), str(OPT["start_hour"])]
+    ok = False
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, text=True)
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line.startswith("OHNE-ALBUM"):
+            log(line.replace("OHNE-ALBUM", "  Ohne Album"))
+            if line.startswith("OHNE-ALBUM FERTIG"):
+                ok = True
+    proc.wait()
+    moved = 0
+    if os.path.isdir(dest):
+        for y in os.listdir(dest):
+            moved += trash_old_copies(os.path.join(dest, y), idx)
+    if moved:
+        log(f"  {moved} alte Kopien in den Papierkorb verschoben.")
+    return ok and proc.returncode == 0
 
 
 def nightly_job():

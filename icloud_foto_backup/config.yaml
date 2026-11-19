@@ -1,5 +1,5 @@
 name: "iCloud Foto-Backup"
-version: "0.6.0"
+version: "0.7.0"
 slug: "icloud_foto_backup"
 description: "Sichert iCloud-Alben nachts auf die WD My Cloud – löscht nie etwas, fügt nur hinzu"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
