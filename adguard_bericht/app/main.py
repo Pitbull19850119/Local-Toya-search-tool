@@ -178,8 +178,146 @@ def build():
         "cats": cats, "days": daylist, "upstreams": up,
     }
     rep["titel"] = "die letzten 7 Tage"
+    rep["sec"], rep["sec_events"] = security_summary(datetime.now() - timedelta(days=7), datetime.now())
     rep["hints"] = hints_for(rep)
     return rep
+
+
+# ---------------- Sicherheit ----------------
+import re, glob
+SEC_FILE = "/data/security.json"
+SEC_LISTS = ("phish", "malware", "scam", "threat", "security", "dandelion", "urlhaus", "hagezi threat", "badware", "stalkerware")
+
+
+def sec_load():
+    try:
+        return json.load(open(SEC_FILE))
+    except Exception:
+        return {"events": [], "alerted": []}
+
+
+def sec_save(d):
+    cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+    d["events"] = [e for e in d["events"] if e["t"] >= cutoff]
+    json.dump(d, open(SEC_FILE, "w"))
+
+
+def security_lists():
+    ids = set()
+    try:
+        for f in (ag("filtering/status").get("filters") or []):
+            if any(k in f.get("name", "").lower() for k in SEC_LISTS):
+                ids.add(f["id"])
+    except Exception:
+        pass
+    return ids
+
+
+def scan_adguard_threats(d, seen):
+    ids = security_lists()
+    names = client_names()
+    try:
+        data = ag("querylog?limit=1000&response_status=blocked").get("data") or []
+    except Exception:
+        return
+    for e in data:
+        reason = e.get("reason", "")
+        rule_ids = {r.get("filter_list_id") for r in (e.get("rules") or [])}
+        if "SafeBrowsing" in reason or rule_ids & ids:
+            t = datetime.fromisoformat(e["time"].replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+            dom = (e.get("question") or {}).get("name", "?")
+            ip = e.get("client", "")
+            key = f"ag|{t.isoformat(timespec='seconds')}|{dom}|{ip}"
+            if key not in seen:
+                d["events"].append({"k": key, "t": t.isoformat(timespec="seconds"), "src": "AdGuard",
+                                    "what": f"Gefährliche Seite blockiert: {dom}", "who": names.get(ip, ip)})
+                seen.add(key)
+
+
+HA_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d).*?(Login attempt or request with invalid authentication from ([^ ]+) \(([^)]*)\)|Banned IP ([0-9a-f.:]+))")
+
+
+def scan_ha(d, seen):
+    try:
+        r = requests.get("http://supervisor/core/api/error_log", headers={"Authorization": f"Bearer {TOKEN}"}, timeout=20)
+        lines = r.text.splitlines()
+    except Exception:
+        return
+    for line in lines:
+        m = HA_RE.search(line)
+        if not m:
+            continue
+        t = m.group(1).replace(" ", "T")
+        if m.group(5):
+            what, who = "IP wegen zu vieler Fehlversuche gesperrt", m.group(5)
+        else:
+            what, who = "Fehlgeschlagene Anmeldung", f"{m.group(3)} {m.group(4)}".strip()
+        key = f"ha|{t}|{who}|{what}"
+        if key not in seen:
+            d["events"].append({"k": key, "t": t, "src": "Home Assistant", "what": what, "who": who})
+            seen.add(key)
+
+
+JF_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)[^\]]*\].*?(Authentication request for \"?([^\" ]+)\"? has been denied[^\n]*?(?:IP: \"?([0-9a-fA-F.:]+))?|Invalid username or password[^\n]*)")
+
+
+def jellyfin_logs():
+    files = []
+    for base in ("/share/jellyfin_neu", "/share/jellyfin"):
+        files += glob.glob(f"{base}/**/log_*.log", recursive=True)
+    return sorted(files)[-3:]
+
+
+def scan_jellyfin(d, seen):
+    for f in jellyfin_logs():
+        try:
+            lines = open(f, errors="ignore").read().splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            m = JF_RE.search(line)
+            if not m:
+                continue
+            t = m.group(1).replace(" ", "T")
+            user = m.group(3) or "?"
+            ipm = re.search(r'IP: "?([0-9a-fA-F.:]+)', line)
+            ip = ipm.group(1) if ipm else ""
+            key = f"jf|{t}|{user}|{ip}"
+            if key not in seen:
+                d["events"].append({"k": key, "t": t, "src": "Jellyfin",
+                                    "what": f"Fehlgeschlagener Login (Benutzer „{user}“)", "who": ip or "über Funnel"})
+                seen.add(key)
+
+
+def security_scan():
+    d = sec_load()
+    seen = {e["k"] for e in d["events"]}
+    before = len(d["events"])
+    scan_adguard_threats(d, seen)
+    scan_ha(d, seen)
+    scan_jellyfin(d, seen)
+    new = d["events"][before:]
+    # Sofort-Alarm: gefährliche Seite oder >=5 Fehlversuche in 30 Min
+    recent = [e for e in d["events"] if e["t"] >= (datetime.now() - timedelta(minutes=30)).isoformat()
+              and e["src"] != "AdGuard"]
+    for e in new:
+        if e["src"] == "AdGuard":
+            notify("⚠️ Gefährliche Seite blockiert", f"{e['who']} wollte {e['what'].split(': ')[-1]} aufrufen – AdGuard hat es verhindert.")
+    stamp = datetime.now().strftime("%Y-%m-%dT%H")
+    if len(recent) >= 5 and stamp not in d["alerted"]:
+        srcs = ", ".join(sorted({e["src"] for e in recent}))
+        notify("🚨 Viele fehlgeschlagene Anmeldungen", f"{len(recent)} Fehlversuche in 30 Minuten ({srcs}). Details im AdGuard-Bericht.")
+        d["alerted"] = (d["alerted"] + [stamp])[-50:]
+    sec_save(d)
+
+
+def security_summary(start, end):
+    d = sec_load()
+    ev = [e for e in d["events"] if start.isoformat() <= e["t"] < end.isoformat()]
+    out = {"AdGuard": 0, "Home Assistant": 0, "Jellyfin": 0}
+    for e in ev:
+        out[e["src"]] = out.get(e["src"], 0) + 1
+    return out, sorted(ev, key=lambda e: e["t"], reverse=True)[:25]
 
 
 def build_range(start, end):
@@ -239,6 +377,7 @@ def build_range(start, end):
            "top_blocked": [(d, n, *categorize(d)) for d, n in top_b],
            "clients": sorted(cli.items(), key=lambda x: -x[1])[:8],
            "cats": sorted(cats.items(), key=lambda x: -x[1]), "days": days[-31:]}
+    rep["sec"], rep["sec_events"] = security_summary(start, end)
     rep["hints"] = hints_for(rep)
     if total == 0:
         rep["hints"].insert(0, "Für diesen Zeitraum sind keine Daten im Protokoll (AdGuard läuft erst seit 19.11.2026).")
@@ -264,6 +403,10 @@ def hints_for(r):
 def push_text(r):
     lines = [f"{fmt(r['total'])} Anfragen, {fmt(r['blocked'])} gesperrt ({r['pct']} %).".replace(",", "."),
              r["hints"][0]]
+    sec = r.get("sec") or {}
+    lines.append(f"🔐 Sicherheit: {sec.get('AdGuard', 0)} gefährliche Seiten blockiert, "
+                 f"{sec.get('Home Assistant', 0)} fremde HA-Anmeldeversuche, {sec.get('Jellyfin', 0)} fehlgeschlagene Jellyfin-Logins"
+                 + (" – alles abgewehrt." if sum(sec.values()) else " – alles ruhig."))
     if r["cats"]:
         lines.append("Gesperrt: " + ", ".join(f"{c} {n}" for c, n in r["cats"][:4]))
     if r["clients"]:
@@ -308,6 +451,10 @@ def scheduler():
         sent = open(LAST_FILE).read().strip() if os.path.exists(LAST_FILE) else ""
         if now.weekday() == OPT["wochentag"] and now.hour >= OPT["uhrzeit"] and sent != week:
             run_report(True)
+        try:
+            security_scan()
+        except Exception as ex:
+            STATE["error"] = f"Sicherheits-Scan: {ex}"
         time.sleep(300)
 
 
@@ -334,7 +481,7 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
 .h{background:#1d2a22;border-radius:10px;padding:10px 14px;margin:6px 0}button{background:#2a7;border:0;color:#fff;padding:10px 16px;border-radius:8px;font-size:15px}
 .muted{color:#999;font-size:13px}"""
     h = [f"<html><head><meta name=viewport content='width=device-width,initial-scale=1'><style>{css}</style></head><body>"]
-    h.append(f"<h1>🛡️ AdGuard – {esc(r['titel']) if r else 'Bericht'}</h1>")
+    h.append(f"<h1>🛡️ Netzwerk-Bericht – {esc(r['titel']) if r else 'Bericht'}</h1>")
     today = datetime.now().date()
     h.append("<form action=range style='display:flex;gap:8px;flex-wrap:wrap;align-items:end;background:#1d1d1d;padding:12px;border-radius:10px'>"
              "<a href=week><button type=button onclick=\"location.href='week'\">Letzte 7 Tage</button></a>"
@@ -353,6 +500,20 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
                  f"<div class=k><b>{r['malware']}</b>gefährliche Seiten</div>" +
                  (f"<div class=k><b>{r['ms']} ms</b>Antwortzeit</div>" if r.get('ms') is not None else "") + "</div>".replace(",", "."))
         h.append("<h2>Kurz gesagt</h2>" + "".join(f"<div class=h>{esc(x)}</div>" for x in r["hints"]))
+        sec = r.get("sec") or {}
+        h.append("<h2>🔐 Sicherheit – abgewehrte Angriffe</h2><div class=kpi>"
+                 f"<div class=k><b>{sec.get('AdGuard', 0)}</b>gefährliche Seiten blockiert (Phishing/Betrug/Schadsoftware)</div>"
+                 f"<div class=k><b>{sec.get('Home Assistant', 0)}</b>fremde Anmeldeversuche Home Assistant</div>"
+                 f"<div class=k><b>{sec.get('Jellyfin', 0)}</b>fehlgeschlagene Logins Jellyfin</div></div>")
+        if r.get("sec_events"):
+            h.append("<table>")
+            for e in r["sec_events"]:
+                h.append(f"<tr><td style='width:110px'>{e['t'][8:10]}.{e['t'][5:7]}. {e['t'][11:16]}</td><td>{esc(e['src'])}: {esc(e['what'])}"
+                         f"<br><span class=muted>{esc(e['who'])}</span></td></tr>")
+            h.append("</table>")
+        else:
+            h.append("<p class=muted>Keine Vorfälle in diesem Zeitraum. Von außen ist dein Netz durch Starlink-CGNAT ohnehin nicht direkt erreichbar – "
+                     "offen sind nur Home Assistant (Nabu Casa) und Jellyfin (Funnel), beide werden hier überwacht.</p>")
         if r["cats"]:
             mx = r["cats"][0][1]
             h.append("<h2>Wer wollte Daten sammeln?</h2><table>")
