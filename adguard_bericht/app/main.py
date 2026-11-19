@@ -84,7 +84,7 @@ def ensure_retention():
 DEFAULT_NAMES = {
  "192.168.0.5": "Echo 1", "192.168.0.68": "Echo 2", "192.168.0.93": "Echo 3", "192.168.0.167": "Echo 4",
  "192.168.0.174": "Echo 5", "192.168.0.206": "Echo 6", "192.168.0.209": "Google Home Mini",
- "192.168.0.13": "Mac", "192.168.0.116": "Lenovo Tab M11", "192.168.0.43": "Emilias iPad", "192.168.0.135": "Melvins iPhone", "192.168.0.152": "Emilias iPhone",
+ "192.168.0.13": "Mac", "192.168.0.116": "Lenovo Tab M11", "192.168.0.43": "Emilias iPad", "192.168.0.135": "Melvins iPhone", "192.168.0.186": "Mikes iPhone", "192.168.0.152": "Emilias iPhone",
  "192.168.0.60": "Fire/Android (0.60)", "192.168.0.172": "Fire/Android (0.172)", "192.168.0.210": "Android (0.210)",
  "192.168.0.103": "Amazon Fire TV", "192.168.0.159": "Nvidia Shield", "192.168.0.171": "Samsung TV",
  "192.168.0.165": "Nintendo Switch", "192.168.0.216": "Home Assistant", "192.168.0.41": "WD My Cloud",
