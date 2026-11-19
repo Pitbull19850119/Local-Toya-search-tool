@@ -299,7 +299,7 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
         h.append("<div class=kpi>"
                  f"<div class=k><b>{r['total']:,}</b>Anfragen gesamt</div>"
                  f"<div class=k><b>{r['blocked']:,}</b>gesperrt ({r['pct']} %)</div>"
-                 f"<div class=k><b>{r['malware']}</b>gefährliche Seiten</div>"
+                 f"<div class=k><b>{r['malware']}</b>gefährliche Seiten</div>" +
                  (f"<div class=k><b>{r['ms']} ms</b>Antwortzeit</div>" if r.get('ms') is not None else "") + "</div>".replace(",", "."))
         h.append("<h2>Kurz gesagt</h2>" + "".join(f"<div class=h>{esc(x)}</div>" for x in r["hints"]))
         if r["cats"]:
