@@ -84,7 +84,7 @@ def ensure_retention():
 DEFAULT_NAMES = {
  "192.168.0.5": "Echo 1", "192.168.0.68": "Echo 2", "192.168.0.93": "Echo 3", "192.168.0.167": "Echo 4",
  "192.168.0.174": "Echo 5", "192.168.0.206": "Echo 6", "192.168.0.209": "Google Home Mini",
- "192.168.0.13": "Mac", "192.168.0.116": "Lenovo Tab M11", "192.168.0.43": "Tablet", "192.168.0.152": "Emilias iPhone",
+ "192.168.0.13": "Mac", "192.168.0.116": "Lenovo Tab M11", "192.168.0.43": "Emilias iPad", "192.168.0.152": "Emilias iPhone",
  "192.168.0.60": "Fire/Android (0.60)", "192.168.0.172": "Fire/Android (0.172)", "192.168.0.210": "Android (0.210)",
  "192.168.0.103": "Amazon Fire TV", "192.168.0.159": "Nvidia Shield", "192.168.0.171": "Samsung TV",
  "192.168.0.165": "Nintendo Switch", "192.168.0.216": "Home Assistant", "192.168.0.41": "WD My Cloud",
@@ -112,7 +112,7 @@ def sync_names():
             ids = c.get("ids", [])
             # Platzhalter-Namen (z. B. "Handy (0.152)") durch echte Namen ersetzen
             new = next((DEFAULT_NAMES[i] for i in ids if i in DEFAULT_NAMES), None)
-            if new and new != c.get("name") and "(0." in c.get("name", ""):
+            if new and new != c.get("name") and ("(0." in c.get("name", "") or c.get("name") in ("Tablet",)):
                 upd = dict(c, name=new)
                 ag("clients/update", "POST", {"name": c["name"], "data": upd})
                 c["name"] = new
