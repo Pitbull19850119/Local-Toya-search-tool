@@ -1,0 +1,23 @@
+name: "Jellyfin Funnel"
+version: "0.1.0"
+slug: "jellyfin_funnel"
+description: "Macht Jellyfin über Tailscale Funnel öffentlich erreichbar (HTTPS, ohne Portfreigabe)"
+url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:tunnel
+panel_title: "Jellyfin Funnel"
+options:
+  ziel: "http://192.168.0.216:8096"
+  geraetename: "jellyfin"
+  authkey: ""
+schema:
+  ziel: str
+  geraetename: str
+  authkey: password?
