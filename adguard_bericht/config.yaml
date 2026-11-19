@@ -1,5 +1,5 @@
 name: "Netzwerk- & Sicherheitsbericht"
-version: "0.5.1"
+version: "0.5.2"
 slug: "adguard_bericht"
 description: "Fasst einmal pro Woche die AdGuard-Statistik verständlich zusammen und schickt sie aufs Handy"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"

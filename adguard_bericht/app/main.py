@@ -112,6 +112,17 @@ def apply_kids():
     """Kinderschutz für die Kinder-Geräte: Jugendschutz, sichere Suche, Social Media gesperrt."""
     try:
         for c in (ag("clients").get("clients") or []):
+            if c.get("name") == "Melvins iPhone":
+                # nur Erwachsenen-/Porno-Filter + sichere Suche, sonst alles frei
+                want = dict(c)
+                want.update({"use_global_settings": False, "filtering_enabled": True,
+                             "parental_enabled": True, "safebrowsing_enabled": True,
+                             "safe_search": {"enabled": True, "bing": True, "duckduckgo": True, "google": True,
+                                             "pixabay": True, "yandex": True, "youtube": False},
+                             "use_global_blocked_services": True})
+                if want != c:
+                    ag("clients/update", "POST", {"name": c["name"], "data": want})
+                continue
             if c.get("name") not in KIDS:
                 continue
             want = dict(c)
