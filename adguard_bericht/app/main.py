@@ -121,7 +121,7 @@ def build():
     daylist = []
     for i, (q, b) in enumerate(zip(days, bdays)):
         d = today - timedelta(days=len(days) - 1 - i)
-        daylist.append((d.strftime("%a %d.%m."), q, b))
+        daylist.append((["Mo","Di","Mi","Do","Fr","Sa","So"][d.weekday()] + d.strftime(" %d.%m."), q, b))
     up = [first(x) for x in s.get("top_upstreams_responses", [])][:3]
     rep = {
         "zeit": datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -131,21 +131,88 @@ def build():
         "clients": [(names.get(ip, ip), n) for ip, n in top_c],
         "cats": cats, "days": daylist, "upstreams": up,
     }
-    # Bewertung in einfachen Worten
+    rep["titel"] = "die letzten 7 Tage"
+    rep["hints"] = hints_for(rep)
+    return rep
+
+
+def build_range(start, end):
+    """Wertet das Abfrageprotokoll für einen frei gewählten Zeitraum aus."""
+    names = client_names()
+    total = blocked = malware = adult = 0
+    dom, cli, perday = {}, {}, {}
+    older = None
+    for _ in range(400):  # max 400.000 Einträge
+        q = "querylog?limit=1000" + (f"&older_than={older}" if older else "")
+        data = ag(q).get("data") or []
+        if not data:
+            break
+        for e in data:
+            t = datetime.fromisoformat(e["time"].replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+            if t >= end:
+                continue
+            if t < start:
+                data = []
+                break
+            total += 1
+            ip = e.get("client", "")
+            name = names.get(ip) or (e.get("client_info") or {}).get("name") or ip
+            cli[name] = cli.get(name, 0) + 1
+            day = t.date()
+            pd = perday.setdefault(day, [0, 0])
+            pd[0] += 1
+            reason = e.get("reason", "")
+            if reason.startswith("Filtered"):
+                if "SafeBrowsing" in reason:
+                    malware += 1
+                elif "Parental" in reason:
+                    adult += 1
+                else:
+                    blocked += 1
+                    d = (e.get("question") or {}).get("name", "?")
+                    dom[d] = dom.get(d, 0) + 1
+                pd[1] += 1
+        if not data:
+            break
+        older = data[-1]["time"]
+    top_b = sorted(dom.items(), key=lambda x: -x[1])[:10]
+    cats = {}
+    for d, n in dom.items():
+        c, _ = categorize(d)
+        cats[c] = cats.get(c, 0) + n
+    days = []
+    d = start.date()
+    while d < end.date() or (d == end.date() and end.hour):
+        q, b = perday.get(d, [0, 0])
+        days.append((["Mo","Di","Mi","Do","Fr","Sa","So"][d.weekday()] + d.strftime(" %d.%m."), q, b))
+        d += timedelta(days=1)
+    pct = round(blocked * 100 / total, 1) if total else 0
+    rep = {"zeit": datetime.now().strftime("%d.%m.%Y %H:%M"),
+           "titel": f"{start:%d.%m.%Y} – {(end - timedelta(seconds=1)):%d.%m.%Y}",
+           "total": total, "blocked": blocked, "pct": pct, "malware": malware, "adult": adult, "ms": None,
+           "top_blocked": [(d, n, *categorize(d)) for d, n in top_b],
+           "clients": sorted(cli.items(), key=lambda x: -x[1])[:8],
+           "cats": sorted(cats.items(), key=lambda x: -x[1]), "days": days[-31:]}
+    rep["hints"] = hints_for(rep)
+    if total == 0:
+        rep["hints"].insert(0, "Für diesen Zeitraum sind keine Daten im Protokoll (AdGuard läuft erst seit 19.11.2026).")
+    return rep
+
+
+def hints_for(r):
     hints = []
-    if malware:
-        hints.append(f"⚠️ {malware}× wurde eine gefährliche Seite (Phishing/Schadsoftware) aufgehalten.")
+    if r["malware"]:
+        hints.append(f"⚠️ {r['malware']}× wurde eine gefährliche Seite (Phishing/Schadsoftware) aufgehalten.")
     else:
         hints.append("✅ Keine gefährlichen Seiten (Phishing/Schadsoftware) aufgerufen.")
-    if pct > 30:
+    if r["pct"] > 30:
         hints.append("ℹ️ Ungewöhnlich viel gesperrt – meist ein Gerät, das ständig nach Hause funkt.")
-    if top_b:
-        d, n, c, why = rep["top_blocked"][0]
+    if r["top_blocked"]:
+        d, n, c, why = r["top_blocked"][0]
         hints.append(f"Häufigster Blocker: {c} ({why}) – {n}×.")
-    if not any("Unbekannt" in str(c) for c in rep["clients"]) and any(c[0].count(".") == 3 for c in rep["clients"]):
-        hints.append("Tipp: Geräte in AdGuard benennen, dann stehen hier Namen statt IPs.")
-    rep["hints"] = hints
-    return rep
+    if any(str(c[0]).count(".") == 3 for c in r["clients"]):
+        hints.append("Tipp: Geräte in AdGuard benennen (Einstellungen → Client-Einstellungen), dann stehen hier Namen statt IPs.")
+    return hints
 
 
 def push_text(r):
@@ -160,6 +227,7 @@ def push_text(r):
 
 
 def notify(title, msg):
+    msg = msg
     for svc in OPT.get("notify_services", []):
         try:
             requests.post(f"http://supervisor/core/api/services/notify/{svc}",
@@ -177,7 +245,7 @@ def run_report(send=True):
         r = build()
         STATE["report"], STATE["error"] = r, None
         if send:
-            notify("🛡️ AdGuard Wochenbericht", push_text(r))
+            notify("🛡️ AdGuard-Bericht " + r["titel"], push_text(r))
             STATE["last"] = r["zeit"]
             open(LAST_FILE, "w").write(datetime.now().strftime("%Y-%W"))
     except Exception as ex:
@@ -215,7 +283,14 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
 .h{background:#1d2a22;border-radius:10px;padding:10px 14px;margin:6px 0}button{background:#2a7;border:0;color:#fff;padding:10px 16px;border-radius:8px;font-size:15px}
 .muted{color:#999;font-size:13px}"""
     h = [f"<html><head><meta name=viewport content='width=device-width,initial-scale=1'><style>{css}</style></head><body>"]
-    h.append("<h1>🛡️ AdGuard – die letzten 7 Tage</h1>")
+    h.append(f"<h1>🛡️ AdGuard – {esc(r['titel']) if r else 'Bericht'}</h1>")
+    today = datetime.now().date()
+    h.append("<form action=range style='display:flex;gap:8px;flex-wrap:wrap;align-items:end;background:#1d1d1d;padding:12px;border-radius:10px'>"
+             "<a href=week><button type=button onclick=\"location.href='week'\">Letzte 7 Tage</button></a>"
+             "<button type=button onclick=\"location.href='range?tage=30'\" style='background:#357'>Letzte 30 Tage</button>"
+             f"<label>von<br><input type=date name=von value={today - timedelta(days=7)}></label>"
+             f"<label>bis<br><input type=date name=bis value={today}></label>"
+             "<button style='background:#357'>Zeitraum anzeigen</button></form>")
     if STATE["error"]:
         h.append(f"<div class=h style='background:#3a1d1d'>{esc(STATE['error'])}</div>")
     if r:
@@ -225,7 +300,7 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
                  f"<div class=k><b>{r['total']:,}</b>Anfragen gesamt</div>"
                  f"<div class=k><b>{r['blocked']:,}</b>gesperrt ({r['pct']} %)</div>"
                  f"<div class=k><b>{r['malware']}</b>gefährliche Seiten</div>"
-                 f"<div class=k><b>{r['ms']} ms</b>Antwortzeit</div></div>".replace(",", "."))
+                 (f"<div class=k><b>{r['ms']} ms</b>Antwortzeit</div>" if r.get('ms') is not None else "") + "</div>".replace(",", "."))
         h.append("<h2>Kurz gesagt</h2>" + "".join(f"<div class=h>{esc(x)}</div>" for x in r["hints"]))
         if r["cats"]:
             mx = r["cats"][0][1]
@@ -250,7 +325,7 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
                 h.append(f"<tr><td style='width:90px'>{d}</td><td><div class='bar q' style='width:{q*100//mx}%'></div>"
                          f"<div class=bar style='width:{b*100//mx}%;margin-top:2px'></div></td><td class=n>{q} / {b} gesperrt</td></tr>")
             h.append("</table>")
-    h.append("<p><form method=post action=send><button>Bericht jetzt aufs Handy schicken</button></form></p>")
+    h.append("<p><form method=post action=send><button>Angezeigten Bericht aufs Handy schicken</button></form></p>")
     h.append("<p class=muted>Grün = alle Anfragen, Rot = gesperrt. Gesperrt wird nur Werbung, Tracking und Gefährliches – "
              "falls etwas nicht funktioniert, in AdGuard im Abfrageprotokoll „Entsperren“.</p></body></html>")
     return "".join(h)
@@ -258,7 +333,32 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
 
 @app.route("/send", methods=["POST"])
 def send():
-    run_report(True)
+    if STATE["report"]:
+        notify("🛡️ AdGuard-Bericht " + STATE["report"]["titel"], push_text(STATE["report"]))
+    else:
+        run_report(True)
+    return redirect("./")
+
+
+@app.route("/week")
+def week():
+    run_report(False)
+    return redirect("./")
+
+
+@app.route("/range")
+def rng():
+    from flask import request
+    try:
+        if request.args.get("tage"):
+            end = datetime.now()
+            start = end - timedelta(days=int(request.args["tage"]))
+        else:
+            start = datetime.strptime(request.args["von"], "%Y-%m-%d")
+            end = datetime.strptime(request.args["bis"], "%Y-%m-%d") + timedelta(days=1)
+        STATE["report"], STATE["error"] = build_range(start, end), None
+    except Exception as ex:
+        STATE["error"] = f"Zeitraum-Auswertung fehlgeschlagen: {ex}"
     return redirect("./")
 
 
