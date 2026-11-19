@@ -118,10 +118,20 @@ def apply_kids():
             want.update({"use_global_settings": False, "filtering_enabled": True,
                          "parental_enabled": True, "safebrowsing_enabled": True,
                          "safe_search": {"enabled": True, "bing": True, "duckduckgo": True, "google": True,
-                                         "pixabay": True, "yandex": True, "youtube": True},
+                                         "pixabay": True, "yandex": True, "youtube": False},
                          "use_global_blocked_services": False, "blocked_services": KID_BLOCK})
             if want != c:
                 ag("clients/update", "POST", {"name": c["name"], "data": want})
+        # YouTube: nur gemäßigter Filter (blendet Inhalte für Ältere aus, ähnlich ab 16)
+        cl = "|".join(f"'{k}'" for k in sorted(KIDS))
+        yt = [f"||{d}^$dnsrewrite=NOERROR;CNAME;restrictmoderate.youtube.com,client={cl}"
+              for d in ("www.youtube.com", "m.youtube.com", "youtubei.googleapis.com",
+                        "youtube.googleapis.com", "www.youtube-nocookie.com")]
+        rules = ag("filtering/status").get("user_rules") or []
+        keep = [r for r in rules if "restrictmoderate.youtube.com" not in r and "Kinderschutz YouTube" not in r]
+        new = keep + ["! Kinderschutz YouTube (automatisch)"] + yt
+        if new != rules:
+            ag("filtering/set_rules", "POST", {"rules": new})
     except Exception as ex:
         STATE["error"] = f"Kinderschutz: {ex}"
 
