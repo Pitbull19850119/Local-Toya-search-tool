@@ -12,7 +12,7 @@ chmod 600 "$CRED"
 
 MOUNTED=0
 for V in 3.0 2.1 2.0 1.0; do
-  if mount -t cifs "$SHARE" /mnt/wd -o "credentials=$CRED,vers=$V,uid=0,gid=0,iocharset=utf8,file_mode=0664,dir_mode=0775,nobrl"; then
+  if mount -t cifs "$SHARE" /mnt/wd -o "credentials=$CRED,vers=$V,uid=0,gid=0,iocharset=utf8,file_mode=0664,dir_mode=0775,nobrl,soft,echo_interval=10"; then
     echo "WD-Freigabe $SHARE eingebunden (SMB $V)"
     MOUNTED=1
     break

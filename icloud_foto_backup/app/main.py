@@ -12,7 +12,7 @@ import signal
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 import waitress
@@ -545,14 +545,49 @@ def download_albums():
     save_state()
 
 
+def wd_ok():
+    try:
+        os.listdir(MOUNT)
+        return os.path.ismount(MOUNT)
+    except OSError:
+        return False
+
+
+def remount():
+    """Bindet die WD neu ein, wenn sie weg war (z. B. nach WD-Neustart)."""
+    import subprocess
+    subprocess.run(["umount", "-l", MOUNT], capture_output=True)
+    cred = "/tmp/wdcred"
+    with open(cred, "w") as f:
+        f.write(f"username={OPT['wd_user']}\npassword={OPT['wd_password']}\n")
+    os.chmod(cred, 0o600)
+    try:
+        for v in ("3.0", "2.1", "2.0", "1.0"):
+            r = subprocess.run(["mount", "-t", "cifs", OPT["wd_share"], MOUNT, "-o",
+                                f"credentials={cred},vers={v},uid=0,gid=0,iocharset=utf8,file_mode=0664,dir_mode=0775,nobrl,soft,echo_interval=10"],
+                               capture_output=True, timeout=60)
+            if r.returncode == 0 and wd_ok():
+                return True
+    finally:
+        os.remove(cred)
+    return False
+
+
 def nightly_job():
-    log("Backup startet.")
     STATE["last_error"] = None
-    if not os.path.ismount(MOUNT) or not os.path.isdir(WD_ROOT):
-        STATE["last_error"] = "WD-Freigabe nicht eingebunden"
-        save_state()
-        notify("Die WD-Freigabe ist nicht eingebunden – Backup nicht möglich.", key="mount")
-        return
+    if not wd_ok() or not os.path.isdir(WD_ROOT):
+        if STATE.get("wd_down") is None:
+            log("WD nicht erreichbar – warte und binde neu ein, sobald sie wieder da ist.")
+            STATE["wd_down"] = datetime.now().isoformat(timespec="minutes")
+        if not remount() or not os.path.isdir(WD_ROOT):
+            STATE["last_error"] = "WD nicht erreichbar – neuer Versuch in 1 Minute"
+            save_state()
+            if STATE["wd_down"] < (datetime.now() - timedelta(hours=1)).isoformat(timespec="minutes"):
+                notify("Die WD ist seit über einer Stunde nicht erreichbar – bitte prüfen.", key="mount", every_h=12)
+            return
+        log(f"WD wieder erreichbar (weg seit {STATE['wd_down'][11:]}), neu eingebunden.")
+        STATE["wd_down"] = None
+    log("Backup startet.")
     download_albums()
     STATE["last_run"] = datetime.now().isoformat(timespec="minutes")
     save_state()
