@@ -143,7 +143,7 @@ def build_range(start, end):
     dom, cli, perday = {}, {}, {}
     older = None
     for _ in range(400):  # max 400.000 Einträge
-        q = "querylog?limit=1000" + (f"&older_than={older}" if older else "")
+        q = "querylog?limit=1000" + (f"&older_than={requests.utils.quote(older, safe='')}" if older else "")
         data = ag(q).get("data") or []
         if not data:
             break
@@ -216,7 +216,7 @@ def hints_for(r):
 
 
 def push_text(r):
-    lines = [f"{r['total']:,} Anfragen, {r['blocked']:,} gesperrt ({r['pct']} %).".replace(",", "."),
+    lines = [f"{fmt(r['total'])} Anfragen, {fmt(r['blocked'])} gesperrt ({r['pct']} %).".replace(",", "."),
              r["hints"][0]]
     if r["cats"]:
         lines.append("Gesperrt: " + ", ".join(f"{c} {n}" for c, n in r["cats"][:4]))
@@ -268,6 +268,10 @@ app = Flask(__name__)
 WD = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
 
+def fmt(n):
+    return f"{n:,}".replace(",", ".")
+
+
 def esc(s):
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -297,8 +301,8 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
         h.append(f"<p class=muted>Stand {r['zeit']} · Push jeden {WD[OPT['wochentag']]} um {OPT['uhrzeit']} Uhr"
                  f"{' · zuletzt gesendet ' + STATE['last'] if STATE['last'] else ''}</p>")
         h.append("<div class=kpi>"
-                 f"<div class=k><b>{r['total']:,}</b>Anfragen gesamt</div>"
-                 f"<div class=k><b>{r['blocked']:,}</b>gesperrt ({r['pct']} %)</div>"
+                 f"<div class=k><b>{fmt(r['total'])}</b>Anfragen gesamt</div>"
+                 f"<div class=k><b>{fmt(r['blocked'])}</b>gesperrt ({r['pct']} %)</div>"
                  f"<div class=k><b>{r['malware']}</b>gefährliche Seiten</div>" +
                  (f"<div class=k><b>{r['ms']} ms</b>Antwortzeit</div>" if r.get('ms') is not None else "") + "</div>".replace(",", "."))
         h.append("<h2>Kurz gesagt</h2>" + "".join(f"<div class=h>{esc(x)}</div>" for x in r["hints"]))
@@ -316,7 +320,7 @@ td.n{text-align:right;white-space:nowrap}.bar{height:8px;background:#e55;border-
         if r["clients"]:
             h.append("<h2>Aktivste Geräte</h2><table>")
             for c, n in r["clients"]:
-                h.append(f"<tr><td>{esc(c)}</td><td class=n>{n:,} Anfragen</td></tr>".replace(",", "."))
+                h.append(f"<tr><td>{esc(c)}</td><td class=n>{fmt(n)} Anfragen</td></tr>".replace(",", "."))
             h.append("</table>")
         if r["days"]:
             mx = max(q for _, q, _ in r["days"]) or 1
