@@ -81,6 +81,52 @@ def ensure_retention():
         STATE["error"] = f"Statistik-Einstellung: {ex}"
 
 
+DEFAULT_NAMES = {
+ "192.168.0.5": "Echo 1", "192.168.0.68": "Echo 2", "192.168.0.93": "Echo 3", "192.168.0.167": "Echo 4",
+ "192.168.0.174": "Echo 5", "192.168.0.206": "Echo 6", "192.168.0.209": "Google Home Mini",
+ "192.168.0.13": "Mac", "192.168.0.116": "Lenovo Tab M11", "192.168.0.43": "Tablet", "192.168.0.152": "Handy (0.152)",
+ "192.168.0.60": "Fire/Android (0.60)", "192.168.0.172": "Fire/Android (0.172)", "192.168.0.210": "Android (0.210)",
+ "192.168.0.103": "Amazon Fire TV", "192.168.0.159": "Nvidia Shield", "192.168.0.171": "Samsung TV",
+ "192.168.0.165": "Nintendo Switch", "192.168.0.216": "Home Assistant", "192.168.0.41": "WD My Cloud",
+ "192.168.0.45": "Repeater RE330", "192.168.0.140": "Egardia Alarm", "192.168.0.84": "Huawei (PV)",
+ "192.168.0.205": "Smartnetz Gas", "192.168.0.199": "Dreame Saugroboter", "192.168.0.89": "Shelly Plus 1",
+ "192.168.0.214": "Steckdose Beken", "192.168.0.111": "Steckdose (0.111)",
+ "192.168.0.14": "Tapo P110 (0.14)", "192.168.0.28": "Tapo P110 (0.28)", "192.168.0.126": "Tapo P110 (0.126)",
+ "192.168.0.222": "Tapo P110 (0.222)",
+ "192.168.0.25": "Ring Cam 3d", "192.168.0.47": "Ring Cam c5", "192.168.0.187": "Ring Cam 32a",
+ "192.168.0.211": "Ring Cam 32", "192.168.0.233": "Ring Cam 3b",
+}
+for _ip in ("63", "71", "83", "91", "101", "109", "137", "154", "161", "166", "249", "251"):
+    DEFAULT_NAMES[f"192.168.0.{_ip}"] = f"Tuya (0.{_ip})"
+for _ip in ("46", "53", "54", "66", "90", "99"):
+    DEFAULT_NAMES[f"192.168.0.{_ip}"] = f"Smart-Gerät (0.{_ip})"
+
+
+def sync_names():
+    """Trägt die Gerätenamen als Clients in AdGuard ein (vorhandene bleiben unangetastet)."""
+    known = set()
+    try:
+        for c in (ag("clients").get("clients") or []):
+            known.update(c.get("ids", []))
+            known.add(c.get("name"))
+    except Exception as ex:
+        STATE["error"] = f"Clients lesen: {ex}"
+        return 0
+    n = 0
+    for ip, name in DEFAULT_NAMES.items():
+        if ip in known or name in known:
+            continue
+        try:
+            ag("clients/add", "POST", {"name": name, "ids": [ip], "tags": [],
+                                       "use_global_settings": True, "use_global_blocked_services": True,
+                                       "filtering_enabled": True, "safebrowsing_enabled": True,
+                                       "parental_enabled": False, "upstreams": []})
+            n += 1
+        except Exception as ex:
+            STATE["error"] = f"Client {name}: {ex}"
+    return n
+
+
 def client_names():
     names = {}
     try:
@@ -254,6 +300,7 @@ def run_report(send=True):
 
 def scheduler():
     ensure_retention()
+    sync_names()
     run_report(send=False)
     while True:
         now = datetime.now()
