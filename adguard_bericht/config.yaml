@@ -1,0 +1,29 @@
+name: "AdGuard Wochenbericht"
+version: "0.1.0"
+slug: "adguard_bericht"
+description: "Fasst einmal pro Woche die AdGuard-Statistik verständlich zusammen und schickt sie aufs Handy"
+url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+host_network: true
+ingress: true
+ingress_port: 8113
+panel_icon: mdi:shield-check
+panel_title: "AdGuard-Bericht"
+homeassistant_api: true
+options:
+  wochentag: 6
+  uhrzeit: 18
+  notify_services:
+    - "mobile_app_iphone"
+  adguard_port: 0
+schema:
+  wochentag: "int(0,6)"
+  uhrzeit: "int(0,23)"
+  notify_services:
+    - str
+  adguard_port: "int(0,65535)"
