@@ -627,6 +627,19 @@ def rng():
     return redirect("./")
 
 
+@app.route("/api/log")
+def api_log():
+    from flask import request
+    q = request.args.get("q", "")
+    st = request.args.get("status", "all")
+    data = ag(f"querylog?limit=200&search={requests.utils.quote(q)}&response_status={st}").get("data") or []
+    names = client_names()
+    return {"items": [{"t": e.get("time", "")[11:19], "d": (e.get("question") or {}).get("name"),
+                       "c": names.get(e.get("client"), e.get("client")), "r": e.get("reason"),
+                       "rule": [r.get("text") for r in (e.get("rules") or [])][:1],
+                       "up": e.get("upstream"), "ans": len(e.get("answer") or [])} for e in data]}
+
+
 @app.route("/refresh")
 def refresh():
     run_report(False)
