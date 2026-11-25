@@ -82,6 +82,26 @@ def expected(photo):
     return out
 
 
+PHOTO_EXT = {
+    ".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif", ".mov", ".mp4",
+    ".m4v", ".dng", ".tif", ".tiff", ".webp", ".avi", ".3gp",
+}
+
+
+def same_sample(a, b, size):
+    """Gleicher Inhalt? Anfang, Mitte, Ende je 64 KB (für den Ordner-Überblick)."""
+    try:
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            for off in (0, max(0, size // 2 - 32768), max(0, size - 65536)):
+                fa.seek(off)
+                fb.seek(off)
+                if fa.read(65536) != fb.read(65536):
+                    return False
+        return True
+    except OSError:
+        return False
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -132,7 +152,7 @@ def main():
         lines.append("  ✓ Alle Alben vollständig.")
     say(f"   Alben: {ok}/{total} Dateien vollständig, {len(problems)} Alben mit Lücken.")
 
-    say("2/3 Fotos ohne Album …")
+    say("2/4 Fotos ohne Album …")
     o_total = o_ok = 0
     o_missing = []
     for p in photos.all:
@@ -151,7 +171,7 @@ def main():
         lines.append(f"  … und {len(o_missing) - 500} weitere")
     say(f"   Ohne Album: {o_ok}/{o_total} vollständig.")
 
-    say("3/3 Papierkorb: jede Datei mit identischer Kopie (SHA-256) in iCloud/ abgleichen …")
+    say("3/4 Papierkorb: jede Datei mit identischer Kopie (SHA-256) in iCloud/ abgleichen …")
     new_idx = {}
     for root, _d, files in os.walk(ICLOUD_ROOT):
         for f in files:
@@ -198,6 +218,28 @@ def main():
     if kept:
         lines.append(f"  ! {len(kept)} ohne Kopie, alter Platz belegt (im Papierkorb gelassen):")
         lines += [f"      {k}" for k in kept[:500]]
+    say("4/4 Alte Ordner (deine eigenen, egal wie benannt): welche Fotos liegen schon in iCloud/? …")
+    lines += ["", "ALTE ORDNER (Abgleich über Dateiname + Größe + Inhalt, Ordnername egal):"]
+    skip = {"iCloud", "_Papierkorb"}
+    for top in sorted(os.listdir(WD_ROOT)):
+        top_full = os.path.join(WD_ROOT, top)
+        if top in skip or top.startswith(".") or not os.path.isdir(top_full):
+            continue
+        for root, dirs, files in os.walk(top_full):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            pics = [f for f in files if os.path.splitext(f)[1].lower() in PHOTO_EXT]
+            if not pics:
+                continue
+            have = 0
+            for f in pics:
+                full = os.path.join(root, f)
+                size = os.path.getsize(full)
+                if any(same_sample(full, c, size) for c in new_idx.get((f.lower(), size), [])):
+                    have += 1
+            rel = os.path.relpath(root, WD_ROOT)
+            mark = "✓ komplett in iCloud/" if have == len(pics) else \
+                f"✗ {len(pics) - have} NUR hier (nicht in iCloud) – behalten!"
+            lines.append(f"  {rel}: {have}/{len(pics)} in iCloud/  {mark}")
     if not t_total:
         verdict = "Papierkorb ist leer."
     elif kept:
