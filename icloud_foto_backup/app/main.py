@@ -739,9 +739,52 @@ def start_now():
     return redirect("./")
 
 
+def run_verify():
+    """Prüfung (verify.py) – wartet, bis kein Backup mehr läuft."""
+    with RUN_LOCK:
+        if not wd_ok() and not remount():
+            log("Prüfung: WD nicht erreichbar – abgebrochen.")
+            return
+        log("Prüfung startet: Alben, Fotos ohne Album, Papierkorb …")
+        STATE["progress"] = "Prüfung"
+        STATE["verify"] = "läuft"
+        save_state()
+        ok = False
+        rest = []
+        proc = subprocess.Popen(["python3", "-u", "/app/verify.py", WD_ROOT],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, text=True)
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line.startswith("PRUEF"):
+                log(line.replace("PRUEF", "  Prüfung", 1))
+                if line.startswith("PRUEF FERTIG"):
+                    ok = True
+            elif line:
+                rest = (rest + [line])[-15:]
+        proc.wait()
+        if not ok:
+            log(f"  Prüfung FEHLGESCHLAGEN (Exit-Code {proc.returncode}):")
+            for line in rest:
+                log("    " + line)
+        STATE["verify"] = datetime.now().isoformat(timespec="minutes") if ok else "Fehler"
+        STATE["progress"] = "fertig"
+        save_state()
+        notify("Prüfung fertig – Bericht: Fotos/Pruefbericht.txt auf der WD." if ok else
+               "Prüfung fehlgeschlagen – siehe Log der App.", title="Foto-Backup Prüfung",
+               key="verify", every_h=0)
+
+
+@app.route("/verify", methods=["POST"])
+def verify_now():
+    if STATE.get("verify") != "läuft":
+        threading.Thread(target=run_verify, daemon=True).start()
+    return redirect("./")
+
+
 @app.route("/api/status")
 def api_status():
-    return jsonify({k: STATE.get(k) for k in ("last_run", "last_error", "needs_code")})
+    return jsonify({k: STATE.get(k) for k in ("last_run", "last_error", "needs_code", "progress", "verify")})
 
 
 if __name__ == "__main__":

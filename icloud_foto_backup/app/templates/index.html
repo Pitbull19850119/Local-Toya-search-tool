@@ -58,6 +58,10 @@
     <form method="post" action="check">
       <button type="submit" {% if busy %}disabled{% endif %}>Jetzt sofort komplett sichern</button>
     </form>
+    <form method="post" action="verify" style="margin-top:8px">
+      <button type="submit" {% if state.verify == 'läuft' %}disabled{% endif %}>Prüfen: alles vollständig? (vor dem Papierkorb-Leeren)</button>
+      {% if state.verify %}<span style="margin-left:8px">Letzte Prüfung: {{ state.verify }} – Bericht: Fotos/Pruefbericht.txt</span>{% endif %}
+    </form>
   </div>
 
   <div class="card">
