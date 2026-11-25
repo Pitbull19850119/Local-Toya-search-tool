@@ -4,7 +4,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends cifs-utils tzdata \
  && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "icloudpd==1.33.1" "flask>=3,<4" "waitress>=3" "requests>=2.31"
+# icloudpd von PyPI ist nur ein fertiges Programm ohne Python-Module.
+# ohne_album.py braucht die Module, deshalb aus dem Quellcode installieren.
+RUN pip install --no-cache-dir "icloudpd @ https://github.com/icloud-photos-downloader/icloud_photos_downloader/archive/refs/tags/v1.33.1.tar.gz" "flask>=3,<4" "waitress>=3" "requests>=2.31" \
+ && python -c "import icloudpd.authentication, pyicloud_ipd.services.photos" \
+ && icloudpd --version
 
 ENV PYTHONUNBUFFERED=1 TZ=Europe/Berlin
 WORKDIR /app

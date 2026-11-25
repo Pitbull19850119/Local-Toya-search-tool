@@ -590,6 +590,7 @@ def run_ohne_album(idx):
     if not STATE.get("run_now"):
         args += [str(OPT["end_hour"]), str(OPT["start_hour"])]
     ok = False
+    rest = []
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, text=True)
     for line in proc.stdout:
@@ -598,7 +599,14 @@ def run_ohne_album(idx):
             log(line.replace("OHNE-ALBUM", "  Ohne Album"))
             if line.startswith("OHNE-ALBUM FERTIG"):
                 ok = True
+        elif line:
+            rest = (rest + [line])[-15:]
     proc.wait()
+    if not ok:
+        log(f"  Ohne Album FEHLGESCHLAGEN (Exit-Code {proc.returncode}):")
+        for line in rest:
+            log("    " + line)
+        STATE["last_error"] = "„Ohne Album“ fehlgeschlagen – siehe Log"
     moved = 0
     if os.path.isdir(dest):
         for y in os.listdir(dest):

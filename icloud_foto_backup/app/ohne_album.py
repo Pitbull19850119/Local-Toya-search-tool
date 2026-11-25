@@ -81,6 +81,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as ex:  # noqa: BLE001
-        log.info(f"OHNE-ALBUM FEHLER: {ex}")
+    except BaseException as ex:  # noqa: BLE001
+        log.info(f"OHNE-ALBUM FEHLER: {type(ex).__name__}: {ex}")
         sys.exit(1)
