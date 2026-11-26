@@ -47,8 +47,11 @@ def api_format():
         return {"ok": False, "err": "Gerät nicht gefunden"}, 400
     if is_system(d):
         return {"ok": False, "err": "System-Platte – wird nie formatiert"}, 400
-    if not serial or serial != d.get("serial"):
-        return {"ok": False, "err": "Seriennummer stimmt nicht – Abbruch"}, 400
+    expect = d.get("serial") or f"{(d.get('model') or '').strip()}|{round(d['size'] / 1e9)}"
+    if not serial or serial != expect:
+        return {"ok": False, "err": f"Bestätigung stimmt nicht (erwartet Modell|GB) – Abbruch"}, 400
+    if dev == "/dev/sda" or (d.get("tran") != "usb"):
+        return {"ok": False, "err": "Nur USB-Platten werden formatiert"}, 400
     if d["size"] < 1e12:
         return {"ok": False, "err": "Platte kleiner als 1 TB – Abbruch zur Sicherheit"}, 400
     LOG.clear()
