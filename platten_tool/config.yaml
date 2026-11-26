@@ -1,5 +1,5 @@
 name: "Platten-Werkzeug"
-version: "0.3.0"
+version: "0.3.1"
 slug: "platten_tool"
 description: "Festplatten: formatieren (nur nach Bestätigung), 1:1 kopieren, nächtlicher Foto-Abgleich WD → 5 TB"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
@@ -25,6 +25,8 @@ devices:
   - /dev/sdd2
 privileged: [SYS_ADMIN, SYS_RAWIO]
 apparmor: false
+map:
+  - all_addon_configs:rw
 homeassistant_api: true
 options:
   sync_aktiv: false

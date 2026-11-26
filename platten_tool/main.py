@@ -323,6 +323,34 @@ def api_sync_status():
     return SYNC
 
 
+JELLYFIN_HOOK = """#!/bin/bash
+# Von Platten-Werkzeug angelegt: 5-TB-Platte „Medien“ unter dem alten Pfad bereitstellen,
+# damit Bibliotheken und Gesehen-Status unverändert bleiben.
+SRC="/mnt/Medien/Filme & Serien"
+if [ -d "$SRC" ]; then
+  mkdir -p /mnt/Portable-2
+  mountpoint -q /mnt/Portable-2 || mount --bind "$SRC" /mnt/Portable-2 && echo "Medien/Filme & Serien -> /mnt/Portable-2 eingebunden"
+else
+  echo "WARNUNG: $SRC nicht gefunden (localdisks: Medien gesetzt?)"
+fi
+"""
+
+
+@app.route("/api/jellyfin_hook", methods=["POST"])
+def api_jellyfin_hook():
+    base = "/addon_configs"
+    cands = [d for d in os.listdir(base) if d.endswith("_jellyfin")] if os.path.isdir(base) else []
+    if not cands:
+        return {"ok": False, "err": f"Jellyfin-Konfigordner nicht gefunden: {os.listdir(base) if os.path.isdir(base) else 'kein /addon_configs'}"}, 400
+    path = os.path.join(base, cands[0], "jellyfin.sh")
+    if os.path.exists(path):
+        os.rename(path, path + ".bak")
+    with open(path, "w") as f:
+        f.write(JELLYFIN_HOOK)
+    os.chmod(path, 0o755)
+    return {"ok": True, "path": path}
+
+
 @app.route("/")
 def index():
     return "<pre>" + json.dumps(api_disks(), indent=2) + "</pre>"
