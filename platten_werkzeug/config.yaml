@@ -1,0 +1,41 @@
+name: "Platten-Werkzeug"
+version: "0.1.0"
+slug: "platten_werkzeug"
+description: "Formatiert eine neue USB-Platte (nur per Seriennummer) und kopiert Medien 1:1 darauf"
+url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: once
+boot: manual
+apparmor: false
+udev: true
+privileged:
+  - SYS_ADMIN
+  - SYS_RAWIO
+  - DAC_READ_SEARCH
+devices:
+  - /dev/fuse
+  - /dev/sdb
+  - /dev/sdb1
+  - /dev/sdb2
+  - /dev/sdc
+  - /dev/sdc1
+  - /dev/sdc2
+  - /dev/sdd
+  - /dev/sdd1
+  - /dev/sdd2
+  - /dev/sde
+  - /dev/sde1
+  - /dev/sde2
+options:
+  aktion: "pruefen"
+  ziel_seriennummer: ""
+  ziel_name: "Medien"
+  quelle_name: ""
+schema:
+  aktion: "list(pruefen|formatieren|kopieren|formatieren_und_kopieren)"
+  ziel_seriennummer: str
+  ziel_name: str
+  quelle_name: str
