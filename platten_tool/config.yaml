@@ -1,0 +1,16 @@
+name: "Platten-Werkzeug"
+version: "0.1.0"
+slug: "platten_tool"
+description: "Zeigt angeschlossene Festplatten und formatiert eine neue Platte (ext4) – nur nach Bestätigung"
+url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
+arch: [amd64, aarch64]
+init: false
+startup: application
+boot: manual
+ingress: true
+ingress_port: 8120
+panel_icon: mdi:harddisk
+panel_title: "Platten"
+full_access: true
+privileged: [SYS_ADMIN, SYS_RAWIO]
+apparmor: false
