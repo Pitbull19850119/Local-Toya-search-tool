@@ -395,7 +395,7 @@ def api_wd_list():
             subs = []
         entry["anzahl"] = len(subs)
         if top.lower() not in ("fotos",):
-            r = subprocess.run(["du", "-s", "-B1G", "--max-depth=1", full], capture_output=True, text=True, timeout=900)
+            r = subprocess.run(["du", "-B1G", "--max-depth=1", full], capture_output=True, text=True, timeout=900)
             for line in r.stdout.splitlines():
                 gb, path = line.split("\t", 1)
                 name = os.path.relpath(path, full)
@@ -409,7 +409,7 @@ def api_wd_list():
     return {"ok": True, "ordner": out}
 
 
-def wd_copy_job(folders, dest_sub, stop_hour):
+def wd_copy_job(folders, dest_sub, stop_hour, merge=False):
     WDC.update(state="läuft", lines=[], result=None, stop=False)
     def lg(m):
         WDC["lines"].append(f"{time.strftime('%d.%m. %H:%M:%S')}  {m}"); del WDC["lines"][:-200]; print("WDCOPY " + m, flush=True)
@@ -421,13 +421,21 @@ def wd_copy_job(folders, dest_sub, stop_hour):
     results = []
     for f in folders:
         src = os.path.join(src_root, f).rstrip("/") + "/"
-        dst = os.path.join(dst_root, dest_sub, os.path.basename(f.rstrip("/"))) + "/"
+        dst = (os.path.join(dst_root, dest_sub) if merge else
+               os.path.join(dst_root, dest_sub, os.path.basename(f.rstrip("/")))) + "/"
         if not os.path.isdir(src):
             lg(f"übersprungen (nicht gefunden): {f}"); continue
         os.makedirs(dst, exist_ok=True)
         lg(f"Kopiere „{f}“ → {dest_sub}/{os.path.basename(f.rstrip('/'))}")
+        if merge:
+            # nichts Vorhandenes überschreiben: gleichnamige Dateien mit anderer Größe nur melden
+            conf = subprocess.run(["rsync", "-rn", "--size-only", "--existing", "--out-format=%n", src, dst],
+                                  capture_output=True, text=True).stdout.split("\n")
+            conf = [x for x in conf if x and not x.endswith("/")]
+            WDC["konflikte"] = conf[:200]
+            lg(f"{len(conf)} gleichnamige Dateien mit anderer Größe – werden NICHT überschrieben (Liste in konflikte)")
         p = subprocess.Popen(["rsync", "-rlt", "--no-perms", "--no-owner", "--no-group", "--partial",
-                              "--info=progress2", src, dst], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                              "--info=progress2"] + (["--ignore-existing"] if merge else []) + [src, dst], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         last, buf, stopped = 0, "", False
         while True:
             ch = p.stdout.read(1)
@@ -446,7 +454,7 @@ def wd_copy_job(folders, dest_sub, stop_hour):
         if stopped:
             lg(f"PAUSIERT ({'Stopp angefordert' if WDC['stop'] else f'ab {stop_hour} Uhr für das Foto-Backup'}) – beim nächsten Start geht es nahtlos weiter")
             WDC["state"] = "pausiert"; break
-        diff = subprocess.run(["rsync", "-rn", "--size-only", "--out-format=%n", src, dst], capture_output=True, text=True).stdout.split("\n")
+        diff = subprocess.run(["rsync", "-rn", "--size-only", "--out-format=%n"] + (["--ignore-existing"] if merge else []) + [src, dst], capture_output=True, text=True).stdout.split("\n")
         missing = [x for x in diff if x and not x.endswith("/")]
         results.append({"ordner": f, "rsync": rc, "fehlend": len(missing)})
         lg(f"„{f}“ fertig: rsync-Code {rc}, fehlend {len(missing)}")
@@ -465,7 +473,7 @@ def api_wd_copy():
     if not folders:
         return {"ok": False, "err": "keine Ordner angegeben"}, 400
     threading.Thread(target=wd_copy_job, args=(folders, data.get("dest_sub", "Filme & Serien"),
-                     data.get("stop_hour", 23)), daemon=True).start()
+                     data.get("stop_hour", 23), bool(data.get("merge"))), daemon=True).start()
     return {"ok": True}
 
 
