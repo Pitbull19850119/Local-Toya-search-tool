@@ -371,6 +371,7 @@ def wd_mount(where="/mnt/wdlist", ro=True):
                                capture_output=True, text=True, timeout=90)
             if r.returncode == 0:
                 return True
+            WDC["mount_err"] = f"vers={v}: {r.stderr.strip() or r.stdout.strip()}"
     finally:
         os.remove(cred)
     return False
@@ -381,7 +382,7 @@ def api_wd_list():
     """Ordner der WD-Freigabe (2 Ebenen) mit Größe – Fotos/ wird nur gezählt, nicht vermessen."""
     root = "/mnt/wdlist"
     if not wd_mount(root):
-        return {"ok": False, "err": "WD nicht einbindbar (wd_user/wd_password in den Optionen?)"}, 400
+        return {"ok": False, "err": "WD nicht einbindbar", "detail": WDC.get("mount_err"), "share": opt().get("wd_share"), "user_set": bool(opt().get("wd_user"))}, 400
     out = []
     for top in sorted(os.listdir(root)):
         full = os.path.join(root, top)
