@@ -1,5 +1,5 @@
 name: "Platten-Werkzeug"
-version: "0.1.2"
+version: "0.2.0"
 slug: "platten_tool"
 description: "Zeigt angeschlossene Festplatten und formatiert eine neue Platte (ext4) – nur nach Bestätigung"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
@@ -13,6 +13,7 @@ panel_icon: mdi:harddisk
 panel_title: "Platten"
 udev: true
 devices:
+  - /dev/fuse
   - /dev/sdb
   - /dev/sdb1
   - /dev/sdb2

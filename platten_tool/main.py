@@ -1,6 +1,6 @@
 """Platten-Werkzeug: listet Laufwerke, formatiert eine gewählte Platte als ext4.
 Formatieren nur mit exakter Seriennummer als Bestätigung und nie die System-Platte."""
-import json, subprocess, time
+import json, os, subprocess, threading, time
 import waitress
 from flask import Flask, request
 
@@ -63,6 +63,98 @@ def api_format():
     part = dev + ("p1" if dev[-1].isdigit() else "1")
     r = sh(["mkfs.ext4", "-F", "-L", label, "-m", "0", "-T", "largefile", part])
     return {"ok": r.returncode == 0, "part": part, "log": LOG}
+
+
+COPY = {"state": "idle", "lines": [], "result": None}
+
+
+def by_label(label):
+    for d in disks():
+        for c in d.get("children") or []:
+            if c.get("label") == label:
+                return c["path"], c.get("fstype")
+    return None, None
+
+
+def cp_log(msg):
+    COPY["lines"].append(f"{time.strftime('%d.%m. %H:%M:%S')}  {msg}")
+    del COPY["lines"][:-200]
+    print(msg, flush=True)
+
+
+def tree_stats(root):
+    n = b = 0
+    for r, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in ("$RECYCLE.BIN", "System Volume Information", "lost+found")]
+        for f in files:
+            try:
+                b += os.path.getsize(os.path.join(r, f)); n += 1
+            except OSError:
+                pass
+    return n, b
+
+
+def copy_job(src_label, dst_label):
+    COPY.update(state="läuft", lines=[], result=None)
+    src, sfs = by_label(src_label)
+    dst, dfs = by_label(dst_label)
+    if not src or not dst:
+        cp_log(f"FEHLER: Quelle „{src_label}“ oder Ziel „{dst_label}“ nicht gefunden"); COPY["state"] = "fehler"; return
+    if dfs != "ext4":
+        cp_log("FEHLER: Ziel ist nicht ext4 – Abbruch"); COPY["state"] = "fehler"; return
+    os.makedirs("/mnt/quelle", exist_ok=True); os.makedirs("/mnt/ziel", exist_ok=True)
+    m = subprocess.run(["ntfs-3g", "-o", "ro", src, "/mnt/quelle"] if sfs == "ntfs" else
+                       ["mount", "-o", "ro", src, "/mnt/quelle"], capture_output=True, text=True)
+    if m.returncode:
+        cp_log(f"FEHLER: Quelle nicht einbindbar: {m.stderr.strip()}"); COPY["state"] = "fehler"; return
+    m = subprocess.run(["mount", dst, "/mnt/ziel"], capture_output=True, text=True)
+    if m.returncode:
+        cp_log(f"FEHLER: Ziel nicht einbindbar: {m.stderr.strip()}"); subprocess.run(["umount", "/mnt/quelle"])
+        COPY["state"] = "fehler"; return
+    qn, qb = tree_stats("/mnt/quelle")
+    cp_log(f"Quelle {src} („{src_label}“, nur lesend): {qn} Dateien, {qb/1e9:.0f} GB → Ziel {dst} („{dst_label}“)")
+    p = subprocess.Popen(["rsync", "-rltD", "--no-perms", "--no-owner", "--no-group", "--info=progress2",
+                          "--exclude=$RECYCLE.BIN", "--exclude=System Volume Information",
+                          "/mnt/quelle/", "/mnt/ziel/"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    last = 0
+    buf = ""
+    while True:
+        ch = p.stdout.read(1)
+        if not ch:
+            break
+        if ch in "\r\n":
+            if buf.strip() and time.time() - last > 60:
+                cp_log("Fortschritt: " + " ".join(buf.split()[:4])); last = time.time()
+            buf = ""
+        else:
+            buf += ch
+    rc = p.wait()
+    zn, zb = tree_stats("/mnt/ziel")
+    diff = subprocess.run(["rsync", "-rn", "--size-only", "--out-format=%n", "--exclude=$RECYCLE.BIN",
+                           "--exclude=System Volume Information", "/mnt/quelle/", "/mnt/ziel/"],
+                          capture_output=True, text=True).stdout.split("\n")
+    missing = [x for x in diff if x and not x.endswith("/")]
+    ok = rc == 0 and not missing and zn >= qn
+    COPY["result"] = {"ok": ok, "rsync": rc, "quelle_dateien": qn, "quelle_gb": round(qb/1e9, 1),
+                      "ziel_dateien": zn, "ziel_gb": round(zb/1e9, 1), "fehlend": missing[:50]}
+    cp_log(("FERTIG: vollständig – " if ok else "WARNUNG: unvollständig – ") +
+           f"Quelle {qn} Dateien/{qb/1e9:.1f} GB, Ziel {zn} Dateien/{zb/1e9:.1f} GB, fehlend {len(missing)}")
+    subprocess.run(["sync"]); subprocess.run(["umount", "/mnt/ziel"]); subprocess.run(["umount", "/mnt/quelle"])
+    COPY["state"] = "fertig" if ok else "unvollständig"
+
+
+@app.route("/api/copy", methods=["POST"])
+def api_copy():
+    data = request.get_json(silent=True) or request.form
+    if COPY["state"] == "läuft":
+        return {"ok": False, "err": "Kopie läuft bereits"}, 409
+    threading.Thread(target=copy_job, args=(data.get("src_label"), data.get("dst_label")), daemon=True).start()
+    return {"ok": True}
+
+
+@app.route("/api/copy_status")
+def api_copy_status():
+    return COPY
 
 
 @app.route("/")
