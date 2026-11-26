@@ -618,6 +618,9 @@ def run_ohne_album(idx):
 
 def nightly_job():
     STATE["last_error"] = None
+    if wd_ok() and os.path.isdir(WD_ROOT) and STATE.get("wd_down"):
+        log(f"WD wieder erreichbar (weg seit {STATE['wd_down'][11:]}).")
+        STATE["wd_down"] = None
     if not wd_ok() or not os.path.isdir(WD_ROOT):
         if STATE.get("wd_down") is None:
             log("WD nicht erreichbar – warte und binde neu ein, sobald sie wieder da ist.")
@@ -627,7 +630,7 @@ def nightly_job():
             save_state()
             if STATE["wd_down"] < (datetime.now() - timedelta(hours=1)).isoformat(timespec="minutes"):
                 notify("Die WD ist seit über einer Stunde nicht erreichbar – bitte prüfen.", key="mount", every_h=12)
-            return
+            return False
         log(f"WD wieder erreichbar (weg seit {STATE['wd_down'][11:]}), neu eingebunden.")
         STATE["wd_down"] = None
     log("Backup startet.")
@@ -635,6 +638,7 @@ def nightly_job():
     STATE["last_run"] = datetime.now().isoformat(timespec="minutes")
     save_state()
     log("Durchlauf beendet.")
+    return True
 
 
 RUN_LOCK = threading.Lock()
@@ -644,10 +648,11 @@ def locked_job():
     if not RUN_LOCK.acquire(blocking=False):
         return
     try:
-        nightly_job()
+        return nightly_job()
     except Exception as ex:  # noqa: BLE001
         log(f"Fehler: {ex}")
         notify(f"Fehler im Foto-Backup: {ex}", key="error")
+        return True
     finally:
         RUN_LOCK.release()
 
@@ -662,8 +667,10 @@ def scheduler():
                 datetime.fromordinal(now.toordinal() - 1).date()
             if (in_window(now) and last_night != night) or \
                     (STATE.get("run_now") and not RUN_LOCK.locked()):
-                last_night = night
-                locked_job()
+                # Nacht erst als erledigt merken, wenn der Lauf wirklich lief
+                # (WD nicht erreichbar -> jede Minute neu versuchen).
+                if locked_job() is not False:
+                    last_night = night
         except Exception as ex:  # noqa: BLE001
             log(f"Fehler: {ex}")
             STATE["last_error"] = str(ex)
