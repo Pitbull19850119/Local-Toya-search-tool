@@ -1,12 +1,12 @@
 name: "Platten-Werkzeug"
-version: "0.2.1"
+version: "0.3.0"
 slug: "platten_tool"
-description: "Zeigt angeschlossene Festplatten und formatiert eine neue Platte (ext4) – nur nach Bestätigung"
+description: "Festplatten: formatieren (nur nach Bestätigung), 1:1 kopieren, nächtlicher Foto-Abgleich WD → 5 TB"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
 arch: [amd64, aarch64]
 init: false
 startup: application
-boot: manual
+boot: auto
 ingress: true
 ingress_port: 8120
 panel_icon: mdi:harddisk
@@ -25,3 +25,26 @@ devices:
   - /dev/sdd2
 privileged: [SYS_ADMIN, SYS_RAWIO]
 apparmor: false
+homeassistant_api: true
+options:
+  sync_aktiv: false
+  sync_uhrzeit: 5
+  wd_share: "//192.168.0.41/Public"
+  wd_ordner: "Fotos"
+  wd_user: ""
+  wd_password: ""
+  ziel_name: "Medien"
+  ziel_ordner: "Fotos"
+  geloescht_tage: 30
+  notify_service: "mobile_app_iphone"
+schema:
+  sync_aktiv: bool
+  sync_uhrzeit: "int(0,23)"
+  wd_share: str
+  wd_ordner: str
+  wd_user: str
+  wd_password: password
+  ziel_name: str
+  ziel_ordner: str
+  geloescht_tage: "int(1,365)"
+  notify_service: str

@@ -163,9 +163,170 @@ def api_copy_status():
     return COPY
 
 
+# ---------------------------------------------------------------- Ordner anlegen / sortieren
+def mount_label(label, where):
+    dev, fs = by_label(label)
+    if not dev:
+        return None
+    os.makedirs(where, exist_ok=True)
+    if os.path.ismount(where):
+        return dev
+    r = subprocess.run(["mount", dev, where], capture_output=True, text=True)
+    return dev if r.returncode == 0 else None
+
+
+@app.route("/api/organize", methods=["POST"])
+def api_organize():
+    """Alles im Wurzelverzeichnis der Zielplatte nach <ordner>/ verschieben, weitere Ordner anlegen."""
+    data = request.get_json(silent=True) or request.form
+    label = data.get("label", "Medien")
+    into = data.get("into", "Filme & Serien")
+    extra = data.get("create", ["Fotos"])
+    if COPY["state"] == "läuft":
+        return {"ok": False, "err": "Kopie läuft noch"}, 409
+    root = "/mnt/org"
+    if not mount_label(label, root):
+        return {"ok": False, "err": f"„{label}“ nicht gefunden/einbindbar"}, 400
+    keep = {into, "lost+found", "_Gelöscht"} | set(extra)
+    os.makedirs(os.path.join(root, into), exist_ok=True)
+    moved = []
+    for name in sorted(os.listdir(root)):
+        if name in keep:
+            continue
+        dst = os.path.join(root, into, name)
+        if os.path.exists(dst):
+            return {"ok": False, "err": f"„{into}/{name}“ existiert schon – nichts weiter verschoben", "moved": moved}, 409
+        os.rename(os.path.join(root, name), dst)  # gleiche Platte: nur umbenennen
+        moved.append(name)
+    for e in extra:
+        os.makedirs(os.path.join(root, e), exist_ok=True)
+    top = sorted(os.listdir(root))
+    subprocess.run(["sync"]); subprocess.run(["umount", root])
+    return {"ok": True, "moved": len(moved), "oben": top}
+
+
+# ---------------------------------------------------------------- nächtlicher Foto-Abgleich
+SYNC = {"state": "idle", "last": None, "lines": []}
+
+
+def opt():
+    try:
+        return json.load(open("/data/options.json"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def notify(msg, title="Foto-Abgleich 5 TB"):
+    svc = opt().get("notify_service")
+    if not svc:
+        return
+    try:
+        import requests
+        requests.post(f"http://supervisor/core/api/services/notify/{svc}",
+                      headers={"Authorization": f"Bearer {os.environ.get('SUPERVISOR_TOKEN')}"},
+                      json={"title": title, "message": msg}, timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def s_log(msg):
+    SYNC["lines"].append(f"{time.strftime('%d.%m. %H:%M:%S')}  {msg}")
+    del SYNC["lines"][:-100]
+    print("SYNC " + msg, flush=True)
+
+
+def sync_job():
+    o = opt()
+    SYNC["state"] = "läuft"
+    wd, dst = "/mnt/wdsync", "/mnt/syncziel"
+    os.makedirs(wd, exist_ok=True)
+    cred = "/tmp/wdcred"
+    with open(cred, "w") as f:
+        f.write(f"username={o.get('wd_user','')}\npassword={o.get('wd_password','')}\n")
+    os.chmod(cred, 0o600)
+    ok_mount = False
+    if os.path.ismount(wd):
+        ok_mount = True
+    else:
+        for v in ("3.0", "2.1", "2.0"):
+            r = subprocess.run(["mount", "-t", "cifs", o.get("wd_share"), wd, "-o",
+                                f"credentials={cred},vers={v},ro,iocharset=utf8,soft,echo_interval=10"],
+                               capture_output=True, text=True, timeout=90)
+            if r.returncode == 0:
+                ok_mount = True
+                break
+    os.remove(cred)
+    if not ok_mount:
+        s_log("WD nicht erreichbar – neuer Versuch in 15 min"); SYNC["state"] = "warte"; return False
+    if not mount_label(o.get("ziel_name", "Medien"), dst):
+        s_log("Zielplatte nicht gefunden"); subprocess.run(["umount", wd]); SYNC["state"] = "fehler"
+        notify("Die 5-TB-Platte wurde nicht gefunden – Foto-Abgleich ausgefallen."); return True
+    src = os.path.join(wd, o.get("wd_ordner", "Fotos")).rstrip("/") + "/"
+    tgt = os.path.join(dst, o.get("ziel_ordner", "Fotos")).rstrip("/") + "/"
+    day = time.strftime("%Y-%m-%d")
+    trash = os.path.join(dst, "_Gelöscht", o.get("ziel_ordner", "Fotos"), day)
+    os.makedirs(tgt, exist_ok=True)
+    s_log(f"Abgleich {src} → {tgt} (Gelöschtes nach _Gelöscht/{o.get('ziel_ordner','Fotos')}/{day})")
+    r = subprocess.run(["rsync", "-rlt", "--no-perms", "--no-owner", "--no-group", "--delete",
+                        "--backup", f"--backup-dir={trash}", "--exclude=_Papierkorb/",
+                        "--stats", src, tgt], capture_output=True, text=True)
+    stats = {k: v for k, v in (l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)}
+    nfiles = stats.get("Number of regular files transferred", "?").strip()
+    ndel = stats.get("Number of deleted files", "0").strip()
+    s_log(f"rsync-Code {r.returncode}: {nfiles} Dateien neu/geändert, {ndel} in _Gelöscht verschoben")
+    if r.returncode not in (0, 24):
+        s_log("Fehler: " + r.stderr.strip()[-300:])
+        notify(f"Foto-Abgleich WD → 5 TB fehlgeschlagen (Code {r.returncode}).")
+    # alte Lösch-Ordner aufräumen
+    base = os.path.join(dst, "_Gelöscht", o.get("ziel_ordner", "Fotos"))
+    keep_days = int(o.get("geloescht_tage", 30))
+    if os.path.isdir(base):
+        for d in os.listdir(base):
+            try:
+                age = (time.time() - time.mktime(time.strptime(d, "%Y-%m-%d"))) / 86400
+            except ValueError:
+                continue
+            if age > keep_days:
+                subprocess.run(["rm", "-rf", os.path.join(base, d)])
+                s_log(f"_Gelöscht/{d} älter als {keep_days} Tage – entfernt")
+    subprocess.run(["sync"]); subprocess.run(["umount", dst]); subprocess.run(["umount", wd])
+    SYNC["last"] = time.strftime("%Y-%m-%d %H:%M")
+    SYNC["state"] = "fertig" if r.returncode in (0, 24) else "fehler"
+    return True
+
+
+def sync_scheduler():
+    done_day = None
+    while True:
+        o = opt()
+        now = time.localtime()
+        if o.get("sync_aktiv") and now.tm_hour >= int(o.get("sync_uhrzeit", 5)) \
+                and done_day != now.tm_yday and COPY["state"] != "läuft":
+            try:
+                if sync_job():
+                    done_day = now.tm_yday
+            except Exception as ex:  # noqa: BLE001
+                s_log(f"Fehler: {ex}"); done_day = now.tm_yday
+        time.sleep(900)
+
+
+@app.route("/api/sync_now", methods=["POST"])
+def api_sync_now():
+    if SYNC["state"] == "läuft":
+        return {"ok": False, "err": "läuft bereits"}, 409
+    threading.Thread(target=sync_job, daemon=True).start()
+    return {"ok": True}
+
+
+@app.route("/api/sync_status")
+def api_sync_status():
+    return SYNC
+
+
 @app.route("/")
 def index():
     return "<pre>" + json.dumps(api_disks(), indent=2) + "</pre>"
 
 
+threading.Thread(target=sync_scheduler, daemon=True).start()
 waitress.serve(app, host="0.0.0.0", port=8120)
