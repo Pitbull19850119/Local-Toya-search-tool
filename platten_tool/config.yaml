@@ -1,5 +1,5 @@
 name: "Platten-Werkzeug"
-version: "0.2.0"
+version: "0.2.1"
 slug: "platten_tool"
 description: "Zeigt angeschlossene Festplatten und formatiert eine neue Platte (ext4) – nur nach Bestätigung"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"

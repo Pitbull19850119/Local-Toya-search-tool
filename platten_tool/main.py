@@ -103,8 +103,14 @@ def copy_job(src_label, dst_label):
     if dfs != "ext4":
         cp_log("FEHLER: Ziel ist nicht ext4 – Abbruch"); COPY["state"] = "fehler"; return
     os.makedirs("/mnt/quelle", exist_ok=True); os.makedirs("/mnt/ziel", exist_ok=True)
-    m = subprocess.run(["ntfs-3g", "-o", "ro", src, "/mnt/quelle"] if sfs == "ntfs" else
-                       ["mount", "-o", "ro", src, "/mnt/quelle"], capture_output=True, text=True)
+    tries = ([["mount", "-t", "ntfs3", "-o", "ro", src, "/mnt/quelle"],
+              ["ntfs-3g", "-o", "ro", src, "/mnt/quelle"]] if sfs == "ntfs" else
+             [["mount", "-o", "ro", src, "/mnt/quelle"]])
+    for t in tries:
+        m = subprocess.run(t, capture_output=True, text=True)
+        if m.returncode == 0:
+            cp_log(f"Quelle eingebunden mit: {t[0]} {t[2] if t[1] == '-t' else ''}".strip())
+            break
     if m.returncode:
         cp_log(f"FEHLER: Quelle nicht einbindbar: {m.stderr.strip()}"); COPY["state"] = "fehler"; return
     m = subprocess.run(["mount", dst, "/mnt/ziel"], capture_output=True, text=True)
