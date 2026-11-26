@@ -1,5 +1,5 @@
 name: "Platten-Werkzeug"
-version: "0.3.1"
+version: "0.4.0"
 slug: "platten_tool"
 description: "Festplatten: formatieren (nur nach Bestätigung), 1:1 kopieren, nächtlicher Foto-Abgleich WD → 5 TB"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"

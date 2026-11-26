@@ -351,6 +351,134 @@ def api_jellyfin_hook():
     return {"ok": True, "path": path}
 
 
+# ---------------------------------------------------------------- WD-Ordner auflisten / kopieren
+WDC = {"state": "idle", "lines": [], "result": None, "stop": False}
+
+
+def wd_mount(where="/mnt/wdlist", ro=True):
+    o = opt()
+    os.makedirs(where, exist_ok=True)
+    if os.path.ismount(where):
+        return True
+    cred = "/tmp/wdcred2"
+    with open(cred, "w") as f:
+        f.write(f"username={o.get('wd_user','')}\npassword={o.get('wd_password','')}\n")
+    os.chmod(cred, 0o600)
+    try:
+        for v in ("3.0", "2.1", "2.0"):
+            r = subprocess.run(["mount", "-t", "cifs", o.get("wd_share"), where, "-o",
+                                f"credentials={cred},vers={v},{'ro,' if ro else ''}iocharset=utf8,soft,echo_interval=10"],
+                               capture_output=True, text=True, timeout=90)
+            if r.returncode == 0:
+                return True
+    finally:
+        os.remove(cred)
+    return False
+
+
+@app.route("/api/wd_list")
+def api_wd_list():
+    """Ordner der WD-Freigabe (2 Ebenen) mit Größe – Fotos/ wird nur gezählt, nicht vermessen."""
+    root = "/mnt/wdlist"
+    if not wd_mount(root):
+        return {"ok": False, "err": "WD nicht einbindbar (wd_user/wd_password in den Optionen?)"}, 400
+    out = []
+    for top in sorted(os.listdir(root)):
+        full = os.path.join(root, top)
+        if not os.path.isdir(full) or top.startswith("."):
+            continue
+        entry = {"name": top, "subs": []}
+        try:
+            subs = sorted(x for x in os.listdir(full) if not x.startswith("."))
+        except OSError:
+            subs = []
+        entry["anzahl"] = len(subs)
+        if top.lower() not in ("fotos",):
+            r = subprocess.run(["du", "-s", "-B1G", "--max-depth=1", full], capture_output=True, text=True, timeout=900)
+            for line in r.stdout.splitlines():
+                gb, path = line.split("\t", 1)
+                name = os.path.relpath(path, full)
+                if name == ".":
+                    entry["gb"] = int(gb)
+                else:
+                    entry["subs"].append({"name": name, "gb": int(gb)})
+        else:
+            entry["subs"] = [{"name": x} for x in subs[:50]]
+        out.append(entry)
+    return {"ok": True, "ordner": out}
+
+
+def wd_copy_job(folders, dest_sub, stop_hour):
+    WDC.update(state="läuft", lines=[], result=None, stop=False)
+    def lg(m):
+        WDC["lines"].append(f"{time.strftime('%d.%m. %H:%M:%S')}  {m}"); del WDC["lines"][:-200]; print("WDCOPY " + m, flush=True)
+    src_root, dst_root = "/mnt/wdcopy", "/mnt/wdziel"
+    if not wd_mount(src_root):
+        lg("FEHLER: WD nicht einbindbar"); WDC["state"] = "fehler"; return
+    if not mount_label(opt().get("ziel_name", "Medien"), dst_root):
+        lg("FEHLER: Zielplatte nicht gefunden"); WDC["state"] = "fehler"; return
+    results = []
+    for f in folders:
+        src = os.path.join(src_root, f).rstrip("/") + "/"
+        dst = os.path.join(dst_root, dest_sub, os.path.basename(f.rstrip("/"))) + "/"
+        if not os.path.isdir(src):
+            lg(f"übersprungen (nicht gefunden): {f}"); continue
+        os.makedirs(dst, exist_ok=True)
+        lg(f"Kopiere „{f}“ → {dest_sub}/{os.path.basename(f.rstrip('/'))}")
+        p = subprocess.Popen(["rsync", "-rlt", "--no-perms", "--no-owner", "--no-group", "--partial",
+                              "--info=progress2", src, dst], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        last, buf, stopped = 0, "", False
+        while True:
+            ch = p.stdout.read(1)
+            if not ch:
+                break
+            if ch in "\r\n":
+                if buf.strip() and time.time() - last > 120:
+                    lg("Fortschritt: " + " ".join(buf.split()[:4])); last = time.time()
+                buf = ""
+                h = time.localtime().tm_hour
+                if WDC["stop"] or (stop_hour is not None and h >= stop_hour):
+                    p.terminate(); stopped = True; break
+            else:
+                buf += ch
+        rc = p.wait()
+        if stopped:
+            lg(f"PAUSIERT ({'Stopp angefordert' if WDC['stop'] else f'ab {stop_hour} Uhr für das Foto-Backup'}) – beim nächsten Start geht es nahtlos weiter")
+            WDC["state"] = "pausiert"; break
+        diff = subprocess.run(["rsync", "-rn", "--size-only", "--out-format=%n", src, dst], capture_output=True, text=True).stdout.split("\n")
+        missing = [x for x in diff if x and not x.endswith("/")]
+        results.append({"ordner": f, "rsync": rc, "fehlend": len(missing)})
+        lg(f"„{f}“ fertig: rsync-Code {rc}, fehlend {len(missing)}")
+    WDC["result"] = results
+    if WDC["state"] == "läuft":
+        WDC["state"] = "fertig"
+    subprocess.run(["sync"]); subprocess.run(["umount", dst_root]); subprocess.run(["umount", src_root])
+
+
+@app.route("/api/wd_copy", methods=["POST"])
+def api_wd_copy():
+    data = request.get_json(silent=True) or {}
+    if WDC["state"] == "läuft":
+        return {"ok": False, "err": "läuft bereits"}, 409
+    folders = data.get("folders") or []
+    if not folders:
+        return {"ok": False, "err": "keine Ordner angegeben"}, 400
+    threading.Thread(target=wd_copy_job, args=(folders, data.get("dest_sub", "Filme & Serien"),
+                     data.get("stop_hour", 23)), daemon=True).start()
+    return {"ok": True}
+
+
+@app.route("/api/wd_copy_stop", methods=["POST"])
+def api_wd_copy_stop():
+    WDC["stop"] = True
+    return {"ok": True}
+
+
+@app.route("/api/wd_copy_status")
+def api_wd_copy_status():
+    return WDC
+
+
 @app.route("/")
 def index():
     return "<pre>" + json.dumps(api_disks(), indent=2) + "</pre>"
