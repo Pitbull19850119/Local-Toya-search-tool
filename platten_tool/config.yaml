@@ -1,5 +1,5 @@
 name: "Platten-Werkzeug"
-version: "0.1.1"
+version: "0.1.2"
 slug: "platten_tool"
 description: "Zeigt angeschlossene Festplatten und formatiert eine neue Platte (ext4) – nur nach Bestätigung"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
@@ -11,6 +11,16 @@ ingress: true
 ingress_port: 8120
 panel_icon: mdi:harddisk
 panel_title: "Platten"
-full_access: true
+udev: true
+devices:
+  - /dev/sdb
+  - /dev/sdb1
+  - /dev/sdb2
+  - /dev/sdc
+  - /dev/sdc1
+  - /dev/sdc2
+  - /dev/sdd
+  - /dev/sdd1
+  - /dev/sdd2
 privileged: [SYS_ADMIN, SYS_RAWIO]
 apparmor: false
