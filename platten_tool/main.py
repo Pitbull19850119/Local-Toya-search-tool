@@ -261,34 +261,43 @@ def sync_job():
     if not mount_label(o.get("ziel_name", "Medien"), dst):
         s_log("Zielplatte nicht gefunden"); subprocess.run(["umount", wd]); SYNC["state"] = "fehler"
         notify("Die 5-TB-Platte wurde nicht gefunden – Foto-Abgleich ausgefallen."); return True
-    src = os.path.join(wd, o.get("wd_ordner", "Fotos")).rstrip("/") + "/"
-    tgt = os.path.join(dst, o.get("ziel_ordner", "Fotos")).rstrip("/") + "/"
+    folders = o.get("sync_ordner") or [o.get("wd_ordner", "Fotos")]
     day = time.strftime("%Y-%m-%d")
-    trash = os.path.join(dst, "_Gelöscht", o.get("ziel_ordner", "Fotos"), day)
-    os.makedirs(tgt, exist_ok=True)
-    s_log(f"Abgleich {src} → {tgt} (Gelöschtes nach _Gelöscht/{o.get('ziel_ordner','Fotos')}/{day})")
-    r = subprocess.run(["rsync", "-rlt", "--no-perms", "--no-owner", "--no-group", "--delete",
-                        "--backup", f"--backup-dir={trash}", "--exclude=_Papierkorb/",
-                        "--stats", src, tgt], capture_output=True, text=True)
-    stats = {k: v for k, v in (l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)}
-    nfiles = stats.get("Number of regular files transferred", "?").strip()
-    ndel = stats.get("Number of deleted files", "0").strip()
-    s_log(f"rsync-Code {r.returncode}: {nfiles} Dateien neu/geändert, {ndel} in _Gelöscht verschoben")
-    if r.returncode not in (0, 24):
-        s_log("Fehler: " + r.stderr.strip()[-300:])
-        notify(f"Foto-Abgleich WD → 5 TB fehlgeschlagen (Code {r.returncode}).")
-    # alte Lösch-Ordner aufräumen
-    base = os.path.join(dst, "_Gelöscht", o.get("ziel_ordner", "Fotos"))
     keep_days = int(o.get("geloescht_tage", 30))
-    if os.path.isdir(base):
-        for d in os.listdir(base):
-            try:
-                age = (time.time() - time.mktime(time.strptime(d, "%Y-%m-%d"))) / 86400
-            except ValueError:
-                continue
-            if age > keep_days:
-                subprocess.run(["rm", "-rf", os.path.join(base, d)])
-                s_log(f"_Gelöscht/{d} älter als {keep_days} Tage – entfernt")
+    worst = 0
+    summary = []
+    for name in folders:
+        src = os.path.join(wd, name).rstrip("/") + "/"
+        if not os.path.isdir(src):
+            s_log(f"„{name}“ auf der WD nicht gefunden – übersprungen"); continue
+        tgt = os.path.join(dst, name).rstrip("/") + "/"
+        trash = os.path.join(dst, "_Gelöscht", name, day)
+        os.makedirs(tgt, exist_ok=True)
+        s_log(f"Abgleich WD/{name} → 5 TB/{name} (Gelöschtes nach _Gelöscht/{name}/{day})")
+        r = subprocess.run(["rsync", "-rlt", "--no-perms", "--no-owner", "--no-group", "--delete",
+                            "--backup", f"--backup-dir={trash}", "--exclude=_Papierkorb/",
+                            "--stats", src, tgt], capture_output=True, text=True)
+        stats = {k: v for k, v in (l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)}
+        nfiles = stats.get("Number of regular files transferred", "?").strip()
+        ndel = stats.get("Number of deleted files", "0").strip()
+        s_log(f"{name}: rsync-Code {r.returncode}, {nfiles} neu/geändert, {ndel} nach _Gelöscht")
+        summary.append(f"{name}: {nfiles} neu, {ndel} gelöscht")
+        if r.returncode not in (0, 24):
+            worst = r.returncode
+            s_log("Fehler: " + r.stderr.strip()[-300:])
+        base = os.path.join(dst, "_Gelöscht", name)
+        if os.path.isdir(base):
+            for d in os.listdir(base):
+                try:
+                    age = (time.time() - time.mktime(time.strptime(d, "%Y-%m-%d"))) / 86400
+                except ValueError:
+                    continue
+                if age > keep_days:
+                    subprocess.run(["rm", "-rf", os.path.join(base, d)])
+                    s_log(f"_Gelöscht/{name}/{d} älter als {keep_days} Tage – entfernt")
+    if worst:
+        notify(f"Abgleich WD → 5 TB mit Fehler (Code {worst}). " + "; ".join(summary))
+    r = type("R", (), {"returncode": worst})()
     subprocess.run(["sync"]); subprocess.run(["umount", dst]); subprocess.run(["umount", wd])
     SYNC["last"] = time.strftime("%Y-%m-%d %H:%M")
     SYNC["state"] = "fertig" if r.returncode in (0, 24) else "fehler"

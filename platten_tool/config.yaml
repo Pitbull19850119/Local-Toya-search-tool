@@ -1,7 +1,7 @@
 name: "Platten-Werkzeug"
-version: "0.4.3"
+version: "0.5.0"
 slug: "platten_tool"
-description: "Festplatten: formatieren (nur nach Bestätigung), 1:1 kopieren, nächtlicher Foto-Abgleich WD → 5 TB"
+description: "Festplatten: formatieren (nur nach Bestätigung), 1:1 kopieren, nächtlicher Abgleich WD → 5 TB (Fotos, Privat)"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
 arch: [amd64, aarch64]
 init: false
@@ -37,6 +37,9 @@ options:
   wd_password: ""
   ziel_name: "Medien"
   ziel_ordner: "Fotos"
+  sync_ordner:
+    - "Fotos"
+    - "Privat"
   geloescht_tage: 30
   notify_service: "mobile_app_iphone"
 schema:
@@ -48,5 +51,7 @@ schema:
   wd_password: password
   ziel_name: str
   ziel_ordner: str
+  sync_ordner:
+    - str
   geloescht_tage: "int(1,365)"
   notify_service: str
