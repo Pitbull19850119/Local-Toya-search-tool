@@ -497,6 +497,62 @@ def api_wd_copy_status():
     return WDC
 
 
+VER = {"state": "idle", "lines": [], "result": None}
+IMG = (".jpg", ".jpeg", ".png", ".nfo", ".xml", ".srt", ".txt")
+
+
+def wd_verify_job(folder, dest_sub):
+    """Nur lesen: Prüfsummen-Vergleich WD-Ordner gegen Zielplatte (rsync -c, trocken). Löscht/schreibt nichts."""
+    VER.update(state="läuft", lines=[], result=None)
+    def lg(m):
+        VER["lines"].append(f"{time.strftime('%d.%m. %H:%M:%S')}  {m}"); del VER["lines"][:-200]; print("WDVERIFY " + m, flush=True)
+    src_root, dst_root = "/mnt/wdver", "/mnt/wdverziel"
+    if not wd_mount(src_root):
+        lg("FEHLER: WD nicht einbindbar"); VER["state"] = "fehler"; return
+    if not mount_label(opt().get("ziel_name", "Medien"), dst_root):
+        lg("FEHLER: Zielplatte nicht gefunden"); VER["state"] = "fehler"; return
+    src = os.path.join(src_root, folder).rstrip("/") + "/"
+    dst = os.path.join(dst_root, dest_sub).rstrip("/") + "/"
+    lg(f"Prüfsummen-Vergleich „{folder}“ gegen {dest_sub} (nur lesen) …")
+    p = subprocess.Popen(["rsync", "-rnc", "--itemize-changes", "--out-format=%i %n", src, dst],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    out, err = p.communicate()
+    film_diff, img_diff, missing_film, missing_img = [], [], [], []
+    for line in out.split("\n"):
+        if not line.startswith(">f"):
+            continue
+        flags, name = line.split(" ", 1)
+        is_img = name.lower().endswith(IMG)
+        new_file = flags[2:].startswith("+++")
+        (missing_img if (new_file and is_img) else missing_film if new_file else
+         img_diff if is_img else film_diff).append(name)
+    VER["result"] = {"rsync": p.returncode, "fehler": err.strip()[:500],
+                     "film_fehlt": missing_film[:200], "film_unterschiedlich": film_diff[:200],
+                     "bild_fehlt": missing_img[:200], "bild_unterschiedlich": img_diff[:200],
+                     "anzahl": {"film_fehlt": len(missing_film), "film_unterschiedlich": len(film_diff),
+                                "bild_fehlt": len(missing_img), "bild_unterschiedlich": len(img_diff)}}
+    VER["state"] = "fertig"
+    lg(f"FERTIG: rsync {p.returncode}; Filme fehlen {len(missing_film)}, Filme abweichend {len(film_diff)}, "
+       f"Nebendateien fehlen {len(missing_img)}, abweichend {len(img_diff)}")
+    subprocess.run(["umount", dst_root]); subprocess.run(["umount", src_root])
+
+
+@app.route("/api/wd_verify", methods=["POST"])
+def api_wd_verify():
+    data = request.get_json(silent=True) or {}
+    if VER["state"] == "läuft":
+        return {"ok": False, "err": "läuft bereits"}, 409
+    threading.Thread(target=wd_verify_job, args=(data.get("folder", "Filme & Serien"),
+                     data.get("dest_sub", "Filme & Serien")), daemon=True).start()
+    return {"ok": True}
+
+
+@app.route("/api/wd_verify_status")
+def api_wd_verify_status():
+    return VER
+
+
+
 @app.route("/")
 def index():
     return "<pre>" + json.dumps(api_disks(), indent=2) + "</pre>"
