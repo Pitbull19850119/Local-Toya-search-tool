@@ -553,10 +553,48 @@ def api_wd_verify_status():
 
 
 
+SMBST = {"state": "aus", "info": ""}
+SMB_MNT = "/mnt/smbmedien"
+
+
+def smb_server():
+    """Gibt die Zielplatte (5 TB) per SMB im Heimnetz frei (lesen + schreiben, nur mit Login)."""
+    o = opt()
+    user, pw = (o.get("smb_user") or "").strip(), o.get("smb_password") or ""
+    if not o.get("smb_aktiv") or not user or not pw:
+        SMBST["state"] = "aus"; return
+    while True:
+        dev = mount_label(o.get("ziel_name", "Medien"), SMB_MNT)
+        if dev:
+            break
+        SMBST.update(state="warte", info="Zielplatte nicht gefunden"); time.sleep(60)
+    subprocess.run(["useradd", "-M", "-s", "/usr/sbin/nologin", user], capture_output=True)
+    subprocess.run(["smbpasswd", "-a", "-s", user], input=f"{pw}\n{pw}\n", text=True, capture_output=True)
+    conf = (
+        "[global]\n workgroup = WORKGROUP\n server role = standalone server\n map to guest = never\n"
+        " disable netbios = yes\n smb ports = 445\n server min protocol = SMB2\n"
+        " load printers = no\n printcap name = /dev/null\n disable spoolss = yes\n log file = /tmp/smb.log\n"
+        "\n[Medien]\n path = " + SMB_MNT + "\n read only = no\n valid users = " + user + "\n"
+        " force user = root\n create mask = 0664\n directory mask = 0775\n"
+    )
+    open("/etc/samba/smb.conf", "w").write(conf)
+    SMBST.update(state="läuft", info="smb://<IP>/Medien")
+    print("SMB Freigabe Medien gestartet", flush=True)
+    while True:
+        subprocess.run(["smbd", "--foreground", "--no-process-group", "-s", "/etc/samba/smb.conf"])
+        SMBST.update(state="neustart", info="smbd beendet"); time.sleep(10)
+
+
+@app.route("/api/smb_status")
+def api_smb_status():
+    return SMBST
+
+
 @app.route("/")
 def index():
     return "<pre>" + json.dumps(api_disks(), indent=2) + "</pre>"
 
 
 threading.Thread(target=sync_scheduler, daemon=True).start()
+threading.Thread(target=smb_server, daemon=True).start()
 waitress.serve(app, host="0.0.0.0", port=8120)

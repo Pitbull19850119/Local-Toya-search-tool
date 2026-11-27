@@ -1,5 +1,5 @@
 name: "Platten-Werkzeug"
-version: "0.5.1"
+version: "0.6.0"
 slug: "platten_tool"
 description: "Festplatten: formatieren (nur nach Bestätigung), 1:1 kopieren, nächtlicher Abgleich WD → 5 TB (Fotos, Privat)"
 url: "https://github.com/Pitbull19850119/Local-Toya-search-tool"
@@ -28,6 +28,10 @@ apparmor: false
 map:
   - all_addon_configs:rw
 homeassistant_api: true
+ports:
+  445/tcp: 445
+ports_description:
+  445/tcp: "SMB-Freigabe der 5-TB-Platte (nur Heimnetz)"
 options:
   sync_aktiv: false
   sync_uhrzeit: 5
@@ -42,6 +46,9 @@ options:
     - "Privat"
   geloescht_tage: 30
   notify_service: "mobile_app_iphone"
+  smb_aktiv: false
+  smb_user: "mike"
+  smb_password: ""
 schema:
   sync_aktiv: bool
   sync_uhrzeit: "int(0,23)"
@@ -55,3 +62,6 @@ schema:
     - str
   geloescht_tage: "int(1,365)"
   notify_service: str
+  smb_aktiv: bool
+  smb_user: str
+  smb_password: password
