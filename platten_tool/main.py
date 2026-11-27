@@ -658,6 +658,25 @@ def api_wd_loeschen():
     ex += ["--exclude", "*.trickplay/"]
     r = subprocess.run(["rsync", "-rn", "--size-only", "--out-format=%i %n"] + ex + [src, dst], capture_output=True, text=True)
     fehlt = [l for l in r.stdout.split("\n") if l.startswith(">f")]
+    if fehlt and r.returncode == 0:
+        # evtl. verschoben: Name+Groesse irgendwo auf der Zielplatte suchen
+        idx = set()
+        for dp, _, fs in os.walk(dst_root):
+            for f in fs:
+                try:
+                    idx.add((f, os.path.getsize(os.path.join(dp, f))))
+                except OSError:
+                    pass
+        rest = []
+        for l in fehlt:
+            rel = l[l.index(" ") + 1:]
+            try:
+                sz = os.path.getsize(os.path.join(src, rel))
+            except OSError:
+                rest.append(l); continue
+            if (os.path.basename(rel), sz) not in idx:
+                rest.append(l)
+        fehlt = rest
     if r.returncode != 0 or fehlt:
         return {"ok": False, "err": "Abbruch: Dateien fehlen/abweichend auf der Zielplatte", "rsync": r.returncode,
                 "anzahl": len(fehlt), "beispiele": fehlt[:30], "stderr": r.stderr[:300]}, 409
