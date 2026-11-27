@@ -697,6 +697,60 @@ def api_wd_loeschen():
     return {"ok": not fehler, "dry": False, "geloescht": geloescht, "fehler": fehler, "dateien_vorher": n_files}
 
 
+
+# ---------------------------------------------------------------- HA-Backups auf die 5 TB
+HAB = {"state": "idle", "last": None, "info": ""}
+
+
+def hab_job():
+    import glob, shutil
+    HAB["state"] = "läuft"
+    dst = "/mnt/habackup"
+    if not mount_label(opt().get("ziel_name", "Medien"), dst):
+        HAB.update(state="fehler", info="Zielplatte nicht gefunden"); return False
+    try:
+        zielordner = os.path.join(dst, "HA-Backups")
+        os.makedirs(zielordner, exist_ok=True)
+        neu = 0
+        for f in sorted(glob.glob("/backup/*.tar")):
+            z = os.path.join(zielordner, os.path.basename(f))
+            if not os.path.exists(z) or os.path.getsize(z) != os.path.getsize(f):
+                shutil.copy2(f, z + ".part"); os.replace(z + ".part", z); neu += 1
+        alle = sorted(glob.glob(os.path.join(zielordner, "*.tar")), key=os.path.getmtime)
+        for old in alle[:-12]:
+            os.remove(old)
+        subprocess.run(["sync"])
+        HAB.update(state="fertig", last=time.strftime("%Y-%m-%d %H:%M"), info=f"{neu} neu, {min(len(alle),12)} gespeichert")
+        return True
+    except Exception as ex:  # noqa: BLE001
+        HAB.update(state="fehler", info=str(ex)); return False
+    finally:
+        subprocess.run(["umount", dst])
+
+
+def hab_scheduler():
+    done_day = None
+    while True:
+        now = time.localtime()
+        if now.tm_hour >= 9 and done_day != now.tm_yday and opt().get("ha_backup_kopie", True):
+            if hab_job():
+                done_day = now.tm_yday
+        time.sleep(900)
+
+
+@app.route("/api/ha_backup_now", methods=["POST"])
+def api_ha_backup_now():
+    if HAB["state"] == "läuft":
+        return {"ok": False, "err": "läuft bereits"}, 409
+    threading.Thread(target=hab_job, daemon=True).start()
+    return {"ok": True}
+
+
+@app.route("/api/ha_backup_status")
+def api_ha_backup_status():
+    return HAB
+
+
 SMBST = {"state": "aus", "info": ""}
 SMB_MNT = "/mnt/smbmedien"
 
@@ -740,5 +794,6 @@ def index():
 
 
 threading.Thread(target=sync_scheduler, daemon=True).start()
+threading.Thread(target=hab_scheduler, daemon=True).start()
 threading.Thread(target=smb_server, daemon=True).start()
 waitress.serve(app, host="0.0.0.0", port=8120)
