@@ -632,6 +632,52 @@ def api_jf_keine_bilder():
     return {"ok": True, "dry": dry, "dateien": out, "verzeichnis": ls[:60]}
 
 
+@app.route("/api/wd_loeschen", methods=["POST"])
+def api_wd_loeschen():
+    """Loescht den Inhalt von WD/<ordner> NUR wenn jede Datei (ausser Bilder) mit gleicher Groesse auf der Zielplatte liegt.
+    Body: {"ordner": "Filme & Serien", "dest_sub": "Filme & Serien", "dry": true|false}"""
+    import shutil
+    data = request.get_json(silent=True) or {}
+    ordner = data.get("ordner", "Filme & Serien")
+    dest_sub = data.get("dest_sub", ordner)
+    dry = data.get("dry", True)
+    if not ordner or ordner.strip("/") in ("", ".", ".."):
+        return {"ok": False, "err": "ungueltiger Ordner"}, 400
+    src_root, dst_root = "/mnt/wdloesch", "/mnt/wdloeschziel"
+    if not wd_mount(src_root, ro=False):
+        return {"ok": False, "err": "WD nicht einbindbar"}, 500
+    if not mount_label(opt().get("ziel_name", "Medien"), dst_root):
+        return {"ok": False, "err": "Zielplatte nicht gefunden"}, 500
+    src = os.path.join(src_root, ordner).rstrip("/") + "/"
+    dst = os.path.join(dst_root, dest_sub).rstrip("/") + "/"
+    if not os.path.isdir(src):
+        return {"ok": False, "err": "WD-Ordner nicht gefunden"}, 404
+    ex = []
+    for e in BILD_EXT:
+        ex += ["--exclude", "*" + e]
+    ex += ["--exclude", "*.trickplay/"]
+    r = subprocess.run(["rsync", "-rn", "--size-only", "--out-format=%i %n"] + ex + [src, dst], capture_output=True, text=True)
+    fehlt = [l for l in r.stdout.split("\n") if l.startswith(">f")]
+    if r.returncode != 0 or fehlt:
+        return {"ok": False, "err": "Abbruch: Dateien fehlen/abweichend auf der Zielplatte", "rsync": r.returncode,
+                "anzahl": len(fehlt), "beispiele": fehlt[:30], "stderr": r.stderr[:300]}, 409
+    eintraege = sorted(os.listdir(src))
+    n_files = sum(len(f) for _, _, f in os.walk(src))
+    if dry:
+        subprocess.run(["umount", dst_root]); subprocess.run(["umount", src_root])
+        return {"ok": True, "dry": True, "wuerde_loeschen": eintraege, "dateien": n_files}
+    geloescht, fehler = [], []
+    for name in eintraege:
+        p = os.path.join(src, name)
+        try:
+            shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+            geloescht.append(name)
+        except OSError as ex2:
+            fehler.append(f"{name}: {ex2}")
+    subprocess.run(["sync"]); subprocess.run(["umount", dst_root]); subprocess.run(["umount", src_root])
+    return {"ok": not fehler, "dry": False, "geloescht": geloescht, "fehler": fehler, "dateien_vorher": n_files}
+
+
 SMBST = {"state": "aus", "info": ""}
 SMB_MNT = "/mnt/smbmedien"
 
