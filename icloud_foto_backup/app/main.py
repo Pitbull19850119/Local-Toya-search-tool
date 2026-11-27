@@ -597,7 +597,7 @@ def run_ohne_album(idx):
         line = line.rstrip()
         if line.startswith("OHNE-ALBUM"):
             log(line.replace("OHNE-ALBUM", "  Ohne Album"))
-            if line.startswith("OHNE-ALBUM FERTIG"):
+            if line.startswith("OHNE-ALBUM FERTIG") or line.startswith("OHNE-ALBUM PAUSE"):
                 ok = True
         elif line:
             rest = (rest + [line])[-15:]

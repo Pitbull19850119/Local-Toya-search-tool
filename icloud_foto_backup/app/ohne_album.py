@@ -41,19 +41,33 @@ def main():
     smart = set(PhotoLibrary.SMART_FOLDERS)
     excl = {a.lower() for a in OPT.get("exclude_albums", [])}
     in_album = set()
-    albums = photos.albums
-    log.info(f"OHNE-ALBUM: prüfe {len(albums) - len(smart)} Alben …")
-    for name, album in albums.items():
-        if name in smart or name.lower() in excl:
-            continue
-        for p in album:
-            in_album.add(p.id)
+    cache = "/data/in_album.json"
+    try:
+        if os.path.getmtime(cache) > datetime.now().timestamp() - 20 * 3600:
+            in_album = set(json.load(open(cache)))
+            log.info(f"OHNE-ALBUM: Albumliste aus Zwischenspeicher ({len(in_album)}).")
+    except (OSError, ValueError):
+        pass
+    if not in_album:
+        albums = photos.albums
+        log.info(f"OHNE-ALBUM: prüfe {len(albums) - len(smart)} Alben …")
+        for name, album in albums.items():
+            if name in smart or name.lower() in excl:
+                continue
+            for p in album:
+                in_album.add(p.id)
+        json.dump(sorted(in_album), open(cache, "w"))
     log.info(f"OHNE-ALBUM: {len(in_album)} Fotos liegen in Alben.")
     new = skipped = 0
+    seen = 0
     for p in photos.all:
+        seen += 1
+        if seen % 2000 == 0:
+            log.info(f"OHNE-ALBUM: {seen} Fotos durchsucht, {new} neu, {skipped} vorhanden …")
         if not in_window():
-            log.info("OHNE-ALBUM: Zeitfenster vorbei – geht nächste Nacht weiter.")
-            break
+            log.info(f"OHNE-ALBUM: Zeitfenster vorbei – geht nächste Nacht weiter. ({seen} durchsucht)")
+            log.info(f"OHNE-ALBUM PAUSE: {new} neu, {skipped} vorhanden.")
+            return
         if p.id in in_album:
             continue
         year = str(p.created.year)
