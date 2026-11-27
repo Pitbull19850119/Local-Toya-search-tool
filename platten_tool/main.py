@@ -553,6 +553,72 @@ def api_wd_verify_status():
 
 
 
+BILD_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tbn")
+ART = ("poster", "backdrop", "landscape", "logo", "folder", "thumb", "banner", "clearart",
+       "fanart", "disc", "cover", "season", "clearlogo", "art", "keyart", "screenshot")
+
+
+def _artwork(name):
+    n = name.lower()
+    stem = os.path.splitext(n)[0]
+    return any(k in stem for k in ART)
+
+
+@app.route("/api/bilder_loeschen", methods=["POST"])
+def api_bilder_loeschen():
+    """Bilder (Cover, Poster, Logos ...) im Ordner Filme & Serien der Zielplatte. dry=true zaehlt nur."""
+    data = request.get_json(silent=True) or {}
+    dry = data.get("dry", True)
+    sub = data.get("ordner", "Filme & Serien")
+    root = "/mnt/bildpruef"
+    if not mount_label(opt().get("ziel_name", "Medien"), root):
+        return {"ok": False, "err": "Zielplatte nicht gefunden"}, 500
+    base = os.path.join(root, sub)
+    n = size = 0
+    andere, per = [], {}
+    for d, dirs, files in os.walk(base):
+        for f in files:
+            if not f.lower().endswith(BILD_EXT):
+                continue
+            p = os.path.join(d, f)
+            if not _artwork(f):
+                andere.append(os.path.relpath(p, base)); continue
+            try:
+                sz = os.path.getsize(p)
+                if not dry:
+                    os.remove(p)
+                n += 1; size += sz
+                top = os.path.relpath(d, base).split(os.sep)[0]
+                per[top] = per.get(top, 0) + 1
+            except OSError as ex:
+                andere.append(f"{os.path.relpath(p, base)} ({ex})")
+    if not dry:
+        subprocess.run(["sync"])
+    subprocess.run(["umount", root])
+    return {"ok": True, "dry": dry, "dateien": n, "mb": round(size / 1e6, 1), "pro_ordner": per,
+            "uebersprungen_kein_cover_name": andere[:100], "anzahl_uebersprungen": len(andere)}
+
+
+@app.route("/api/jf_keine_bilder", methods=["POST"])
+def api_jf_keine_bilder():
+    """Jellyfin: Bibliotheks-Optionen so setzen, dass keine Bilder/NFO in Medienordner geschrieben werden."""
+    import glob, re, shutil
+    data = request.get_json(silent=True) or {}
+    dry = data.get("dry", True)
+    out = []
+    for p in glob.glob("/addon_configs/db21ed7f_jellyfin/**/options.xml", recursive=True):
+        t = open(p, encoding="utf-8").read()
+        if "<LibraryOptions" not in t:
+            continue
+        new = re.sub(r"<SaveLocalMetadata>\s*true\s*</SaveLocalMetadata>", "<SaveLocalMetadata>false</SaveLocalMetadata>", t)
+        new = re.sub(r"<MetadataSavers>.*?</MetadataSavers>", "<MetadataSavers />", new, flags=re.S)
+        out.append({"datei": p, "aenderung": new != t, "save_vorher": re.findall(r"<SaveLocalMetadata>(.*?)</SaveLocalMetadata>", t)})
+        if new != t and not dry:
+            shutil.copy(p, p + ".bak")
+            open(p, "w", encoding="utf-8").write(new)
+    return {"ok": True, "dry": dry, "dateien": out}
+
+
 SMBST = {"state": "aus", "info": ""}
 SMB_MNT = "/mnt/smbmedien"
 
