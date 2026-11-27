@@ -581,7 +581,7 @@ def api_bilder_loeschen():
             if not f.lower().endswith(BILD_EXT):
                 continue
             p = os.path.join(d, f)
-            if not _artwork(f):
+            if not _artwork(f) and not data.get("alle"):
                 andere.append(os.path.relpath(p, base)); continue
             try:
                 sz = os.path.getsize(p)
@@ -592,10 +592,18 @@ def api_bilder_loeschen():
                 per[top] = per.get(top, 0) + 1
             except OSError as ex:
                 andere.append(f"{os.path.relpath(p, base)} ({ex})")
+    leer = 0
+    if not dry and data.get("alle"):
+        for d, dirs, files in os.walk(base, topdown=False):
+            if d != base and os.path.basename(d).endswith(".trickplay") or (d != base and os.path.basename(d).startswith("320 - ")):
+                try:
+                    os.rmdir(d); leer += 1
+                except OSError:
+                    pass
     if not dry:
         subprocess.run(["sync"])
     subprocess.run(["umount", root])
-    return {"ok": True, "dry": dry, "dateien": n, "mb": round(size / 1e6, 1), "pro_ordner": per,
+    return {"ok": True, "dry": dry, "leere_trickplay_ordner_entfernt": leer, "dateien": n, "mb": round(size / 1e6, 1), "pro_ordner": per,
             "uebersprungen_kein_cover_name": andere[:100], "anzahl_uebersprungen": len(andere)}
 
 
@@ -616,7 +624,12 @@ def api_jf_keine_bilder():
         if new != t and not dry:
             shutil.copy(p, p + ".bak")
             open(p, "w", encoding="utf-8").write(new)
-    return {"ok": True, "dry": dry, "dateien": out}
+    ls = []
+    for d, dirs, files in os.walk("/addon_configs/db21ed7f_jellyfin"):
+        if d.count("/") > 5:
+            dirs[:] = []; continue
+        ls.append(d + " :: " + ",".join(sorted(files))[:150])
+    return {"ok": True, "dry": dry, "dateien": out, "verzeichnis": ls[:60]}
 
 
 SMBST = {"state": "aus", "info": ""}
