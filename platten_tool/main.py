@@ -774,7 +774,12 @@ def smb_server():
         " load printers = no\n printcap name = /dev/null\n disable spoolss = yes\n log file = /tmp/smb.log\n"
         "\n[Medien]\n path = " + SMB_MNT + "\n read only = no\n valid users = " + user + "\n"
         " force user = root\n create mask = 0664\n directory mask = 0775\n"
+        "\n[TimeMachine]\n path = " + SMB_MNT + "/TimeMachine\n read only = no\n valid users = " + user + "\n"
+        " force user = root\n vfs objects = catia fruit streams_xattr\n fruit:time_machine = yes\n"
+        " fruit:time_machine_max_size = 1T\n fruit:metadata = stream\n fruit:model = MacSamba\n"
+        " create mask = 0600\n directory mask = 0700\n"
     )
+    os.makedirs(SMB_MNT + "/TimeMachine", exist_ok=True)
     open("/etc/samba/smb.conf", "w").write(conf)
     SMBST.update(state="läuft", info="smb://<IP>/Medien")
     print("SMB Freigabe Medien gestartet", flush=True)
