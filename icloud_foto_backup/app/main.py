@@ -530,12 +530,20 @@ def download_albums():
         code, _ = run_icloudpd(
             ["--album", album, "-d", dest, "--folder-structure", "none"],
             stop_at_window_end=True)
-        moved = trash_old_copies(dest, idx)
-        if moved:
-            log(f"  {moved} alte Kopien in den Papierkorb verschoben.")
+        try:
+            moved = trash_old_copies(dest, idx) if os.path.isdir(dest) else 0
+            if moved:
+                log(f"  {moved} alte Kopien in den Papierkorb verschoben.")
+        except Exception as ex:  # noqa: BLE001
+            log(f"  Papierkorb-Schritt übersprungen: {ex}")
         with LOCK:
             if code == 0:
                 done[album] = datetime.now().isoformat(timespec="minutes")
+            else:
+                fails = STATE.setdefault("failed_albums", [])
+                if album not in fails:
+                    fails.append(album)
+                log(f"  ⚠ Album „{album}“ fehlgeschlagen (Exit {code}) – weiter mit dem nächsten.")
             save_state()
     # Fotos, die in keinem Album liegen
     t = done.get("__ohne_album__")
